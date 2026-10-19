@@ -1,14 +1,15 @@
-# Five-minute demo
+# Five-minute demonstration
 
-For a timed walkthrough and evaluator Q&A, see [DESIGN.md](DESIGN.md).
+Use a disposable local database and the development-only seed accounts. Never use demo credentials in production. This script is a guide, not evidence that an action passed; confirm the current run and running service before presenting it.
 
-1. Sign in as `lead@demo.test` / `demo-local-only`. This is a local-demo credential only.
-2. Show the team-scoped dashboard counts.
-3. Open the command center with Ctrl/Cmd+K and search for “database.” Filter by status or overdue, save a browser-local view, and use **Load more** to show cursor pagination.
-4. Create an urgent work item, claim or assign it, and show the activity entry and actor.
-5. Move it through `IN_PROGRESS` to `AWAITING_APPROVAL`. Sign in as `member@demo.test` and show approval is denied/unavailable; sign back in as lead and approve.
-6. In two tabs, edit the same version: show the stale save returns 409 and does not overwrite the winning change.
-7. Explain the conditional-update claim race, transaction-bound activity history, idempotent create key, and outbox worker. Use test output rather than claiming unobserved behavior.
-8. Report the latest local results: API 58 tests, UI 22 tests, migrations on a fresh test database, and the prior HTTP E2E 71 checks. A live deployment has not been performed.
+1. Sign in as `lead@demo.test` with the local-only password `demo-local-only`. Point out the team-scoped dashboard summaries.
+2. Search for a known seeded work item; apply a status/priority filter and load another cursor page.
+3. Create a work item and show its detail page and `CREATED` activity entry.
+4. Assign or claim the item. Explain that the claim is a conditional PostgreSQL update.
+5. Transition it to `IN_PROGRESS`, then `AWAITING_APPROVAL`. Show member approval is denied and a lead/admin can approve.
+6. Show the resulting status and actor in the activity history.
+7. Explain how stale `expectedVersion` values return 409 and how a repeated `Idempotency-Key` replays item creation.
+8. Run `python scripts\e2e.py` for real HTTP/PostgreSQL workflow checks when the API is seeded and available.
+9. Describe Alembic and the outbox worker. Clearly state whether deployment and live endpoints have actually been verified.
 
-The demo accounts and the seed script are strictly for disposable local/demo databases. The seed script truncates existing data.
+See [DESIGN.md](../DESIGN.md) for suggested timings and evaluator questions.

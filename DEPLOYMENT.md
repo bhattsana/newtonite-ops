@@ -1,200 +1,188 @@
-# Newtonite Ops deployment guide
+# Deployment guide (Render)
 
-## Deployment target and scope
+This guide configures deployment but does not create services or claim that Newtonite Ops is live. Render is compatible with the current architecture: managed PostgreSQL, FastAPI web service, static Vite frontend, and a separate background worker. Do not deploy until the current local test results and diff have been reviewed.
 
-Newtonite Ops is a **Node.js 22 / Express TypeScript API**, a **React/Vite static frontend**, a PostgreSQL database, and a continuously running PostgreSQL outbox worker. It is not a FastAPI application. Render supports each required service type:
+## Services
 
-1. Render PostgreSQL (managed database)
-2. Render Web Service (Express API)
-3. Render Static Site (Vite frontend)
-4. Render Background Worker (outbox processing)
+Create the PostgreSQL database first, then the API, static site, and worker. Use PostgreSQL 16 and the same Render region for the database, API, and worker. Use a persistent database plan with backups appropriate to the data. The API and worker should use Render's private/internal database connection string.
 
-The instructions below configure services but do not create them. No deployment, paid resource, or repository push has been performed.
+### 1. FastAPI API Web Service
 
-The current downloaded workspace has no Git metadata. Render's Git-based deployment requires a repository connected to Render. Before deployment, place the reviewed project in a private Git repository using your own approved process. Do not include `.env`, local database files, generated secrets, or credentials.
-
-## Latest local verification
-
-Verified on 2026-10-19 in the current Windows workspace:
-
-- API tests: **58/58 passed** against an isolated disposable PostgreSQL test database.
-- Frontend tests: **19/19 passed** against a separate disposable PostgreSQL test database and the real API.
-- Fresh-database migrations: **001_init.sql**, **002_auth_hardening.sql**, and **003_activity_append_only.sql** applied successfully.
-- API and frontend type checks passed. Lint completed with **0 errors and 16 existing `any` warnings**.
-- Production frontend build passed with an explicit HTTPS API origin; it rejects missing API configuration and the generated bundle contains no localhost API fallback.
-- The HTTP E2E script passed against a running local API and a fresh seeded disposable PostgreSQL database. A real browser session against the local Vite frontend/API verified login, dashboard, search, status filter, pagination, create, claim, assignment, workflow approval, authorization controls, and activity history.
-- Earlier full browser suite (111 Chromium checks), Docker image builds, Compose validation, and isolated Compose runtime checks passed in prior verification. The full 111-check suite and Docker/Compose checks were not repeated in this run.
-
-These are local test results, not evidence of a Render deployment. No live services or endpoints have been verified.
-
-## Production readiness gates
-
-- Use a new, dedicated production database. Never point production at a development/test database.
-- Do not run `npm run seed` in production. The seed script truncates application data and creates public demo accounts with a shared, known password.
-- The application currently has **no user registration or administrator/user provisioning endpoint**. Arrange and review a secure first-admin provisioning procedure before go-live. Do not use the demo seed as that procedure.
-- Use a production-generated JWT secret and the exact HTTPS frontend origin in the API CORS allowlist.
-- Production smoke tests that require login cannot pass until a real first user/team has been provisioned.
-- Deploy to staging first, and verify database backups/restore procedures before loading production data.
-
-## Create services in this order
-
-Use the same Render region for the API, worker, and PostgreSQL database. Choose final service names before configuring origins so their generated `onrender.com` URLs are known. For a custom frontend domain, use that HTTPS origin instead.
-
-### 1. Managed PostgreSQL
-
-Create a Render PostgreSQL database:
-
-- PostgreSQL major version: **16** (matches the local/test version).
-- Region: same as the API and worker.
-- Database: dedicated production database; retain Render's generated credentials.
-- Select a persistent plan with backups/retention appropriate to the data and availability requirements. Do not rely on an expiring or disposable database for live data.
-- Restrict external database access in the Render Networking settings (disable it if operationally possible, or allowlist only required operator IPs). The API and worker use the **Internal Database URL** from the same region; do not use the external URL for either service.
-- The `pg` connection parser must be told to use Render's documented libpq-compatible `sslmode=require` behavior for its self-signed internal TLS certificate. In the API and worker `DATABASE_URL`, append `?uselibpqcompat=true&sslmode=require` (or `&...` if the URL already has query parameters). This requires TLS but does not validate the self-signed certificate; keep the database on Render's private network and never use this URL mode for an untrusted public endpoint.
-- The application creates a PostgreSQL pool with a maximum of 20 connections **per process**. Account for the API and worker pools, and any additional API instances, when selecting the database plan and scaling services.
-
-Do not copy connection credentials into source files, logs, tickets, or this guide.
-
-### 2. API Web Service
-
-Create a Render **Web Service** connected to the repository:
-
-| Setting | Value |
+| Render setting | Value |
 |---|---|
-| Runtime | Node |
-| Root Directory | Repository root (blank) |
-| Node version | `>=22 <23` from the root `package.json` |
-| Build Command | `npm ci --omit=dev` |
-| Start Command | `npm run migrate && npm start` |
+| Runtime | Python 3 |
+| Root Directory | `backend` |
+| Build Command | `pip install -r requirements.txt` |
+| Start Command | `alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT` |
 | Health Check Path | `/health` |
 
-Set these API environment variables in the Render dashboard:
+Set these variables in the Render service's environment settings:
 
 | Variable | Value |
 |---|---|
-| `NODE_ENV` | `production` |
-| `DATABASE_URL` | Render PostgreSQL **Internal Database URL** |
-| `JWT_SECRET` | Secret generated for production with at least 32 characters; use 32 random bytes encoded as 64 hex characters |
-| `CORS_ORIGINS` | Exact HTTPS origin of the frontend, e.g. `https://<your-static-site>.onrender.com`; add a comma-separated custom frontend origin only if it is also required |
-| `TRUST_PROXY` | `1` for Render's single trusted proxy hop, so client-IP login throttling sees the forwarded client address |
+| `APP_ENV` | `production` |
+| `DATABASE_URL` | Internal URL for the dedicated production PostgreSQL database |
+| `SESSION_SECRET` | Unique random secret, at least 32 characters; generate with `python -c "import secrets; print(secrets.token_urlsafe(48))"` and store only in Render's secret environment settings |
+| `CORS_ORIGINS` | Exact HTTPS origin of the deployed frontend, without a path or trailing slash |
+| `COOKIE_SECURE` | `true` |
+| `LOGIN_MAX_FAILURES` | `10` (or an explicitly reviewed policy value) |
+| `SESSION_TTL_MINUTES` | `15` |
+| `PORT` | Supplied by Render; do not hardcode |
 
-Render provides `PORT`; do not hardcode a production port. The API listens on that value. Do not set a wildcard CORS origin or a localhost origin in production. The service refuses to start if the production CORS allowlist is missing, non-HTTPS, or contains paths instead of origins.
+The API normalizes common `postgres://` and `postgresql://` URLs to the psycopg SQLAlchemy driver. Production startup rejects a short/missing session secret, non-HTTPS or wildcard CORS origins, and insecure cookies. The CORS policy permits credentials only from the configured exact origins. Do not include localhost or a wildcard in the production list.
 
-The `/health` endpoint executes `SELECT 1`; Render should mark the instance unhealthy if PostgreSQL is unavailable.
+The start command applies Alembic migrations before starting Uvicorn. Migrations use a PostgreSQL advisory lock, but they are not a substitute for a verified backup. Back up the database and test changes in staging before a production release. Never reset, drop, or seed production data.
 
-### 3. Static frontend
+### 2. React/Vite Static Site
 
-Create a Render **Static Site** from the same repository:
-
-| Setting | Value |
+| Render setting | Value |
 |---|---|
-| Root Directory | Repository root (blank); the build imports shared types from `../shared` |
-| Node version | `>=22 <23` from the root `package.json` |
-| Build Command | `npm ci --prefix web --include=dev && npm --prefix web run build` |
-| Publish Directory | `web/dist` |
+| Runtime | Static Site |
+| Root Directory | `frontend` |
+| Build Command | `npm ci && npm run build` |
+| Publish Directory | `dist` |
 
-Set this build-time environment variable on the Static Site:
+Set the build-time variable:
 
 | Variable | Value |
 |---|---|
-| `VITE_API_BASE_URL` | API HTTPS origin only, e.g. `https://<your-api-service>.onrender.com` (no path and no trailing slash) |
+| `VITE_API_BASE_URL` | API HTTPS origin only, e.g. `https://<api-service>.onrender.com`; no `/api/v1` suffix, path, credentials, or trailing slash |
 
-`VITE_API_BASE_URL` is embedded in the public frontend bundle; it is **not a secret**. Production builds now fail rather than silently compiling a localhost API URL if it is missing or malformed. Rebuild the Static Site whenever this URL changes.
+The production Vite build fails if this URL is missing or not an HTTPS origin. It is public configuration embedded in the JavaScript bundle, not a secret. Rebuild the static site after changing it.
 
-After Render gives the Static Site its final URL, ensure the API's `CORS_ORIGINS` is exactly that origin. If the API was initially configured with a planned URL, correct it in the dashboard and redeploy the API before smoke testing. Add a custom domain to the allowlist only after the domain is configured with HTTPS.
+Add a Render rewrite rule for the React router:
 
-### 4. Outbox background worker
+| Source | Destination | Action |
+|---|---|---|
+| `/*` | `/index.html` | Rewrite |
 
-Create a Render **Background Worker** from the same repository:
+Configure static response security headers if supported by the selected host. The built `index.html` includes a CSP meta policy restricting connections to the configured API; a response header can additionally set `frame-ancestors 'none'`. For example, include `connect-src 'self' https://<api-service>.onrender.com` and `frame-ancestors 'none'` in the host's CSP header. Do not configure a second restrictive CSP that omits the API origin.
 
-| Setting | Value |
+### 3. PostgreSQL outbox worker
+
+| Render setting | Value |
 |---|---|
-| Runtime | Node |
-| Root Directory | Repository root (blank) |
-| Node version | `>=22 <23` from the root `package.json` |
-| Build Command | `npm ci --omit=dev` |
-| Start Command | `npm run worker` |
+| Runtime | Background Worker, Python |
+| Root Directory | `backend` |
+| Build Command | `pip install -r requirements.txt` |
+| Start Command | `python -m app.worker.main` |
 
-Set `NODE_ENV=production` and the same production `DATABASE_URL` as the API. The worker does not serve HTTP and does not need `PORT`, `JWT_SECRET`, or `CORS_ORIGINS`. Deploy it after the API has successfully applied migrations. It claims outbox jobs from PostgreSQL, retries eligible failures, and records permanently failed jobs in `outbox_jobs`; monitor its Render logs and that table.
+Configure the worker with the same `APP_ENV`, `DATABASE_URL`, and `SESSION_SECRET` as the API. `CORS_ORIGINS` and `COOKIE_SECURE` may also be supplied from the API environment; the app settings validate production configuration when the worker loads. The worker does not expose an HTTP health endpoint.
 
-## Database migrations and releases
+The worker leases outbox rows with `FOR UPDATE SKIP LOCKED` and writes idempotent notification rows in PostgreSQL. It does not send email, SMS, or push messages. Confirm that the process remains running and that a generated job reaches `DONE` before relying on background processing.
 
-The API start command runs `npm run migrate` before `npm start`. The migration runner applies ordered SQL migrations once, records them in `schema_migrations`, takes a PostgreSQL advisory lock, and rolls back a failing migration transaction. Current migration files are:
+### 4. Provision the first production account
 
-- `001_init.sql`
-- `002_auth_hardening.sql`
-- `003_activity_append_only.sql`
-
-For each release:
-
-1. Take/confirm a recoverable database backup before schema changes.
-2. Test the same release against a separate staging database first.
-3. Review new SQL for compatibility with the previous running application version; use expand/contract migrations for zero-downtime changes.
-4. Deploy the API and verify migration logs plus `/health`.
-5. Deploy the worker and frontend after API compatibility is confirmed.
-6. Never drop schemas, reset production data, or run the demo seed as a migration step.
-
-The migration lock prevents concurrent migration runs but does not replace backups or backward-compatible migration design.
-
-## Local validation before deployment
-
-Run from PowerShell at the repository root. API and web test suites reset/seed their target test databases; only use separately created, disposable databases whose names end in `_test` or `-test`.
+There is no public sign-up or user-administration API. After the API migration succeeds, use Render's API Shell or another secure operator shell, with the production environment attached, to create the first team and admin:
 
 ```powershell
-npm ci
-npm --prefix web ci
-npm run typecheck
-npm run lint
-$env:DATABASE_URL = '<connection-string-for-a-dedicated-api-test-database-ending-in-_test>'
-npm test
-$env:WEB_TEST_DATABASE_URL = '<different-connection-string-for-a-dedicated-web-test-database-ending-in-_test>'
-npm --prefix web test
-$env:VITE_API_BASE_URL = 'https://api.example.invalid'
-npm --prefix web run build
-Remove-Item Env:DATABASE_URL, Env:WEB_TEST_DATABASE_URL, Env:VITE_API_BASE_URL -ErrorAction SilentlyContinue
+python -m app.provision_user --team-name "Operations" --team-slug operations --name "Initial Admin" --email admin@example.com --role ADMIN
 ```
 
-Do not use production or development database URLs for these tests.
+The command prompts for a password twice without echoing it, requires at least 16 characters, creates the team only if that slug is absent, refuses to overwrite an existing user, and writes the password hash. Confirm the selected database is the intended production database before running it. Use the same command with an existing team slug and a chosen role to add additional team members.
 
-## Manual deployment checklist
+Do not use `python -m app.seed` in production. It is development-only and contains shared demo credentials.
 
-- [ ] Put the reviewed workspace in a private Git repository through your approved workflow; verify `.env` and credentials are excluded.
-- [ ] Create production PostgreSQL 16 in the same region as the services; choose persistent storage and suitable backup/retention.
-- [ ] Create the API Web Service with the commands and environment above; generate/store `JWT_SECRET` only in Render's secret environment UI.
-- [ ] Create the Static Site with `VITE_API_BASE_URL` set to the API's HTTPS origin and the repository root as its build context.
-- [ ] Set the API `CORS_ORIGINS` to the final Static Site HTTPS origin (and only required custom origins); redeploy the API if changed.
-- [ ] Confirm API startup logs show the intended migrations applied or already current; confirm `/health` returns HTTP 200 and `{"ok":true}`.
-- [ ] Provision the first real administrator and team using a separately reviewed, non-destructive process. Do not seed demo accounts in production.
-- [ ] Create the Background Worker with the production database URL; confirm it remains running and processes a test outbox job.
-- [ ] Verify database backup/restore, monitoring/alerts, and a rollback/release procedure before accepting real work.
+## Release and migration procedure
 
-## Live smoke tests
+1. Review the code and migration revisions. Take or confirm a restorable backup.
+2. Apply the release to a staging database first and verify the current API and worker.
+3. Confirm the API's `DATABASE_URL` references the intended production database; do not log or paste its value.
+4. Deploy the API. Check startup logs for migration completion and the service health state.
+5. Deploy the static site with the API HTTPS origin. Set the API `CORS_ORIGINS` to the final static-site HTTPS origin and redeploy the API if required.
+6. Deploy the worker. Confirm it remains active and processes a smoke-test outbox row.
+7. Provision the first administrator using the interactive command above.
+8. Run the live smoke tests below and verify database backup/restore separately before accepting real work.
 
-Replace the placeholders only in your local terminal; do not paste secret values into logs or reports.
+Alembic supports fresh databases and a recognized legacy schema adoption path. It rejects unknown or partial schemas instead of dropping/recreating them. If production contains an existing database, review its schema and migration logs before proceeding; stop on an adoption error and investigate rather than resetting it.
+
+## Local Windows validation
+
+The following commands use the local Compose PostgreSQL instance, loopback port `5433`, and databases explicitly named for testing. First create the local `.env` from `.env.example`, replace its session secret with a generated local-only value, and start the database:
 
 ```powershell
-$api = 'https://<your-api-service>.onrender.com'
-$frontend = 'https://<your-static-site>.onrender.com'
+Copy-Item .env.example .env
+docker compose up -d db
+docker compose exec db psql -U newtonite -d postgres -c "CREATE DATABASE newtonite_api_eval_test;"
+docker compose exec db psql -U newtonite -d postgres -c "CREATE DATABASE newtonite_frontend_eval_test;"
+```
+
+Do not drop or reset an existing database to rerun tests; choose another fresh database name ending in `_test`.
+
+Install Python dependencies and run backend tests and lint:
+
+```powershell
+py -3.11 -m venv backend\.venv
+backend\.venv\Scripts\python.exe -m pip install -r backend\requirements-dev.txt
+$env:DATABASE_URL = "postgresql+psycopg://newtonite:local_dev_only@127.0.0.1:5433/newtonite_api_eval_test"
+Push-Location backend
+..\backend\.venv\Scripts\python.exe -m pytest app\tests -q
+..\backend\.venv\Scripts\ruff.exe check app
+Pop-Location
+```
+
+Run frontend integration tests (which start a real FastAPI process) and quality checks:
+
+```powershell
+$env:FRONTEND_TEST_DATABASE_URL = "postgresql+psycopg://newtonite:local_dev_only@127.0.0.1:5433/newtonite_frontend_eval_test"
+$env:PYTHON = (Resolve-Path backend\.venv\Scripts\python.exe).Path
+npm --prefix frontend ci
+npm --prefix frontend test
+npm --prefix frontend run typecheck
+npm --prefix frontend run lint
+$env:VITE_API_BASE_URL = "https://api.example.invalid"
+npm --prefix frontend run build
+Remove-Item Env:DATABASE_URL, Env:FRONTEND_TEST_DATABASE_URL, Env:PYTHON, Env:VITE_API_BASE_URL -ErrorAction SilentlyContinue
+```
+
+The frontend integration setup runs Alembic and additive demo seeding on its dedicated frontend test database. It requires a fresh isolated database for a reproducible clean run. `DATABASE_URL` and `FRONTEND_TEST_DATABASE_URL` must not identify the same database. These suites must never target a production or valuable development database.
+
+Validate Compose syntax and local service behavior without deleting its database volume:
+
+```powershell
+docker compose config --quiet
+docker compose up --build -d
+docker compose ps
+Invoke-RestMethod http://localhost:8000/health
+Invoke-WebRequest http://localhost:5173 -Method Get
+```
+
+To seed disposable local demo data only:
+
+```powershell
+docker compose exec api python -m app.seed
+```
+
+To stop services without removing persistent database data:
+
+```powershell
+docker compose down
+```
+
+Do not add `-v` to `docker compose down`.
+
+## Live smoke-test checklist
+
+After deployment and real account provisioning, run checks from an operator machine:
+
+```powershell
+$api = "https://<api-service>.onrender.com"
+$frontend = "https://<static-site>.onrender.com"
 Invoke-RestMethod "$api/health"
 Invoke-WebRequest $frontend -Method Get
 ```
 
-After a real first user is provisioned:
+Then, using the browser and a non-demo account:
 
-1. Open `$frontend` and check browser developer tools: API requests use the deployed HTTPS API origin, not localhost; no CORS or CSP errors appear.
-2. Sign in with the separately provisioned account; verify `/api/v1/auth/me`, dashboard, and team-scoped item listing.
-3. Create, edit, assign/claim, and transition an item; verify a second authorized user sees the changes and activity history.
-4. Verify a user outside the item's team gets the expected authorization response; verify stale edits return `409`.
-5. Generate an outbox event and confirm the worker processes it; inspect Render worker logs and the resulting database notification/job status.
-6. Sign out, verify a protected route requires authentication, and verify the exact frontend origin is allowed while an unlisted origin receives no `Access-Control-Allow-Origin` header.
-7. Confirm the database backup is restorable in a separate non-production target.
+1. Sign in and confirm dashboard and work-item requests reach the deployed HTTPS API.
+2. Search and filter team records; confirm pagination loads a later page.
+3. Create a work item, edit it, assign/claim it, add a comment, and inspect activity history.
+4. Verify member/lead restrictions and cross-team isolation using accounts with known roles.
+5. Open the same version in two sessions and verify one stale edit receives `409 STALE_VERSION`.
+6. Retry item creation with the same idempotency key and confirm the same item is returned once.
+7. Sign out, then verify a protected route redirects to sign-in.
+8. Confirm the frontend origin is allowed by CORS and an unrelated origin is not.
+9. Generate an outbox event and confirm the worker records its notification and marks the job complete.
+10. Verify backup and restore in a separate non-production database.
 
-Do not call the app live until the services are deployed and these endpoint and user-journey checks actually pass.
-
-## Render references
-
-- [Node/Express Web Services](https://render.com/docs/web-services)
-- [Static Sites](https://render.com/docs/static-sites)
-- [Background Workers](https://render.com/docs/background-workers)
-- [Render PostgreSQL connections](https://render.com/docs/postgresql-creating-connecting)
-- [Health Checks](https://render.com/docs/health-checks)
-- [Language versions](https://render.com/docs/language-support)
+Do not describe the application as live or deployment-ready until the actual service URLs, user journey, worker, and database behavior have been checked. Do not deploy, create paid resources, push changes, or alter repository visibility as part of local validation.
