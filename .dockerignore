@@ -1,0 +1,9 @@
+node_modules
+web
+scripts
+docs
+*.tgz
+.env
+.env.*
+!.env.example
+.git

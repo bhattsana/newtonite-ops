@@ -1,0 +1,1 @@
+{"compilerOptions":{"strict":true,"target":"es2022","module":"nodenext","moduleResolution":"nodenext","skipLibCheck":true,"noEmit":true},"include":["src","tests","shared","vitest.config.ts"]}
