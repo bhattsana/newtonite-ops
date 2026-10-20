@@ -12,6 +12,13 @@ export function CommandPalette({ open, canCreate, onClose }: Props) {
   const input = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
   const search = query.trim();
+  const normalizedSearch = search.toLocaleLowerCase();
+  const commands = [
+    { label: 'Work dashboard', keywords: 'home overview', path: '/' },
+    { label: 'Open work queue', keywords: 'active queue items', path: '/?active=true' },
+    { label: 'Teams', keywords: 'members team', path: '/teams' },
+    ...(canCreate ? [{ label: 'Create a work item', keywords: 'new create task', path: '/items/new' }] : []),
+  ].filter((command) => `${command.label} ${command.keywords}`.toLocaleLowerCase().includes(normalizedSearch));
   const results = useQuery({
     queryKey: ['command-search', search],
     queryFn: ({ signal }) => api<ItemList>('/items', { signal, query: { q: search, limit: 6 } }),
@@ -40,8 +47,20 @@ export function CommandPalette({ open, canCreate, onClose }: Props) {
       event.preventDefault();
       close();
     }
-    if (event.key === 'Enter' && event.target === input.current && results.data?.data.length === 1) {
-      visit(`/items/${results.data.data[0].id}`);
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      const options = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[data-palette-option]')];
+      if (options.length) {
+        event.preventDefault();
+        const current = options.findIndex((option) => option === document.activeElement);
+        const next = current < 0
+          ? (event.key === 'ArrowDown' ? 0 : options.length - 1)
+          : (current + (event.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length;
+        options[next]?.focus();
+      }
+    }
+    if (event.key === 'Enter' && event.target === input.current) {
+      if (search && commands.length === 1) visit(commands[0].path);
+      else if (results.data?.data.length === 1) visit(`/items/${results.data.data[0].id}`);
     }
     if (event.key !== 'Tab') return;
     const controls = [...(event.currentTarget.querySelectorAll<HTMLElement>('input, button:not(:disabled)'))];
@@ -61,22 +80,21 @@ export function CommandPalette({ open, canCreate, onClose }: Props) {
       <h2 id="palette-title">Command center</h2>
       <label className="sr-only" htmlFor="command-search">Search work items or commands</label>
       <input id="command-search" ref={input} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search work or jump to a page…" />
-      <div className="palette-group" aria-label="Navigation">
-        <p className="eyebrow">Navigate</p>
-        <button onClick={() => visit('/')}>Work dashboard</button>
-        <button onClick={() => visit('/teams')}>Teams</button>
-        {canCreate && <button onClick={() => visit('/items/new')}>Create a work item</button>}
-      </div>
-      {search.length >= 2 && <div className="palette-group" aria-label="Work item results">
+      {commands.length > 0 && <div className="palette-group" role="group" aria-label="Commands">
+        <p className="eyebrow">{search ? 'Matching commands' : 'Commands'}</p>
+        {commands.map((command) => <button data-palette-option key={command.path} onClick={() => visit(command.path)}>{command.label}</button>)}
+      </div>}
+      {search.length >= 2 && <div className="palette-group" role="group" aria-label="Work item results">
         <p className="eyebrow">Matching work</p>
         {results.isLoading && <p className="muted small" role="status">Searching your team work…</p>}
         {results.error && <p className="alert err" role="alert">Could not search work items. Close the command center and try again.</p>}
         {results.data?.data.length === 0 && <p className="muted small">No matching work items.</p>}
-        {results.data?.data.map((item: Item) => <button key={item.id} onClick={() => visit(`/items/${item.id}`)}>
+        {results.data?.data.map((item: Item) => <button data-palette-option key={item.id} onClick={() => visit(`/items/${item.id}`)}>
           <span className="mono">{item.reference}</span><span>{item.title}</span><span className="muted small">{item.status.replace(/_/g, ' ')}</span>
         </button>)}
       </div>}
-      <footer><span>Search respects your team access</span><kbd>ESC</kbd></footer>
+      {search && commands.length === 0 && search.length < 2 && <p className="palette-empty">No matching commands. Enter at least two characters to search work items.</p>}
+      <footer><span>Search respects your team access</span><span><kbd>↑</kbd> <kbd>↓</kbd> navigate <kbd>ENTER</kbd> open <kbd>ESC</kbd> close</span></footer>
     </section>
   </div>;
 }

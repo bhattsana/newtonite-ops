@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, NavLink, Navigate, Route, Routes, useNavigate, useParams, useSearchParams, useLocation } from 'react-router-dom';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, ApiError, Activity, Comment, DashboardSummary, Item, ItemList, Me, Member, NEXT, Priority, Status, Team, atLeast, setUnauthorizedHandler } from './api';
+import { api, API_ORIGIN, ApiError, Activity, Comment, DashboardSummary, Item, ItemList, Me, Member, NEXT, Priority, Status, Team, atLeast, setUnauthorizedHandler } from './api';
 import { Confirm, Empty, ErrorState, PriorityTag, Skeleton, StatusBadge, Toasts, ago, isOverdue, useToast } from './ui';
 import { CommandPalette } from './CommandPalette';
 
@@ -23,7 +23,7 @@ export default function App() {
   </Routes></Toasts>;
 }
 
-function Login() {
+function Login({ apiUnavailable = false, retry, retrying = false }: { apiUnavailable?: boolean; retry?: () => void; retrying?: boolean } = {}) {
   const nav = useNavigate(); const qc = useQueryClient(); const [sp] = useSearchParams();
   const [email, setEmail] = useState(DEMO_HINT ? 'member@demo.test' : ''); const [password, setPassword] = useState(''); const [show, setShow] = useState(false);
   const m = useMutation({
@@ -31,17 +31,109 @@ function Login() {
     onSuccess: async () => { await qc.invalidateQueries({ queryKey: ['me'] }); nav('/'); },
   });
   const err = m.error as ApiError | null;
-  return <main className="login min-h-screen"><form onSubmit={(e: FormEvent) => { e.preventDefault(); m.mutate(); }} noValidate>
-    <div className="brand"><span className="logo" aria-hidden>N</span>Newtonite Ops</div>
-    <h1>Operations under pressure</h1><p className="muted">Investigate, assign, approve and resolve work reliably.</p>
-    {sp.get('expired') && <p className="alert warn" role="alert">Your session expired. Please sign in again.</p>}
-    {err && <p className="alert err" role="alert">{err.status === 401 ? 'Invalid email or password.' : err.status === 429 ? 'Too many failed sign-in attempts. Please wait a few minutes and try again.' : err.status === 0 ? err.message : 'The server had a problem. Try again shortly.'}</p>}
-    <label>Email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" required /></label>
-    <div className="field"><label htmlFor="pw">Password</label><span className="pw"><input id="pw" type={show ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
-      <button type="button" className="link" onClick={() => setShow(!show)} aria-pressed={show}>{show ? 'Hide' : 'Show'}</button></span></div>
-    <button className="btn primary wide" disabled={m.isPending || !email || !password}>{m.isPending ? 'Signing in…' : 'Sign in'}</button>
-    {DEMO_HINT && <p className="muted small">Local demo accounts: admin@, lead@, member@, viewer@demo.test — password <code>demo-local-only</code></p>}
-  </form></main>;
+  const errorMessage = err
+    ? err.status === 401 ? 'Invalid email or password.'
+      : err.status === 429 ? 'Too many failed sign-in attempts. Please wait a few minutes and try again.'
+        : err.status === 0 ? err.message : 'The server had a problem. Try again shortly.'
+    : undefined;
+  return <main className="login">
+    <LoginScene />
+    <LoginHud />
+    <div className="login-layout">
+      <LoginCard
+        email={email}
+        password={password}
+        showPassword={show}
+        pending={m.isPending}
+        errorMessage={errorMessage}
+        expired={Boolean(sp.get('expired'))}
+        apiUnavailable={apiUnavailable}
+        retry={retry}
+        retrying={retrying}
+        onEmailChange={setEmail}
+        onPasswordChange={setPassword}
+        onTogglePassword={() => setShow(!show)}
+        onSubmit={(event) => { event.preventDefault(); m.mutate(); }}
+      />
+    </div>
+  </main>;
+}
+
+function LoginScene() {
+  return <div className="login-universe" aria-hidden="true" />;
+}
+
+function LoginHud() {
+  return <div className="login-hud" aria-hidden="true">
+    <div className="hud-label hud-top-left"><i className="hud-tick" />OPERATIONS<br />PEOPLE<br />TECHNOLOGY<br /><span>A BRIGHTER TOMORROW</span></div>
+    <div className="hud-label hud-left-middle"><i className="hud-tick" />TURN<br />COMPLEXITY<br />INTO CLARITY</div>
+    <div className="hud-label hud-top-right">REAL WORK <i className="hud-dot" /> REAL IMPACT</div>
+    <div className="hud-label hud-right-middle">MONITOR<br />INVESTIGATE<br />ASSIGN<br />APPROVE<br />RESOLVE</div>
+    <div className="hud-label hud-bottom-right"><i className="hud-tick" />BUILT FOR TEAMS WHO<br />KEEP THE WORLD MOVING</div>
+  </div>;
+}
+
+type LoginCardProps = {
+  email: string;
+  password: string;
+  showPassword: boolean;
+  pending: boolean;
+  errorMessage?: string;
+  expired: boolean;
+  apiUnavailable: boolean;
+  retry?: () => void;
+  retrying: boolean;
+  onEmailChange: (value: string) => void;
+  onPasswordChange: (value: string) => void;
+  onTogglePassword: () => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+};
+
+function LoginCard({
+  email, password, showPassword, pending, errorMessage, expired, apiUnavailable, retry, retrying,
+  onEmailChange, onPasswordChange, onTogglePassword, onSubmit,
+}: LoginCardProps) {
+  return <form className="login-card glass" onSubmit={onSubmit} noValidate>
+    <div className="login-brand">
+      <span className="login-mark" aria-hidden="true">N</span>
+      <div className="login-wordmark">Newtonite <span>Ops</span></div>
+    </div>
+    <p className="eyebrow login-eyebrow">Aether / Mission control</p>
+    <h1>Clarity across<br className="login-title-break" /> every moving part.</h1>
+    <p className="login-lead">A focused workspace for the work that keeps your operation moving.</p>
+    {apiUnavailable && <div className="login-api-warning" role="alert"><span><i aria-hidden="true" /> API UNREACHABLE</span><p>Could not reach <code>{API_ORIGIN}</code>. Start the API, then retry.</p>{retry && <button type="button" className="link" onClick={retry} disabled={retrying}>{retrying ? 'Checking connection…' : 'Retry connection'}</button>}</div>}
+    {expired && <p className="alert warn" role="alert">Your session expired. Please sign in again.</p>}
+    {errorMessage && <p className="alert err" role="alert">{errorMessage}</p>}
+    <label className="login-field" htmlFor="login-email">Email<span className="login-input-wrap"><LoginIcon name="mail" /><input id="login-email" type="email" value={email} onChange={(event) => onEmailChange(event.target.value)} autoComplete="username" placeholder="you@company.com" required /></span></label>
+    <div className="field login-field"><label htmlFor="pw">Password</label><span className="login-input-wrap pw"><LoginIcon name="lock" /><input id="pw" type={showPassword ? 'text' : 'password'} value={password} onChange={(event) => onPasswordChange(event.target.value)} autoComplete="current-password" placeholder="Enter your password" required />
+      <button type="button" className="password-toggle" onClick={onTogglePassword} aria-pressed={showPassword} aria-label={showPassword ? 'Hide password' : 'Show password'}><LoginIcon name={showPassword ? 'eye-off' : 'eye'} /></button></span></div>
+    <button className="btn primary wide login-submit" disabled={pending || !email || !password}><span>{pending ? <><i className="login-spinner" aria-hidden="true" />Signing in…</> : 'Sign in'}</span><span className="submit-arrow" aria-hidden="true">→</span></button>
+    {DEMO_HINT && <DemoAccounts onSelect={onEmailChange} />}
+  </form>;
+}
+
+function DemoAccounts({ onSelect }: { onSelect: (email: string) => void }) {
+  const accounts = ['admin@demo.test', 'lead@demo.test', 'member@demo.test', 'viewer@demo.test'];
+  return <div className="demo-accounts">
+    <div className="demo-divider"><span />or<span /></div>
+    <section className="demo-hint" aria-label="Local demo accounts">
+      <LoginIcon name="users" />
+      <div><p>Local demo accounts</p><div className="demo-account-chips">{accounts.map((account) => <button type="button" key={account} className="demo-account-chip" onClick={() => onSelect(account)} aria-label={`Use ${account}`}>{account}</button>)}</div>
+        <p className="demo-password">Password <code>demo-local-only</code></p>
+      </div>
+    </section>
+  </div>;
+}
+
+function LoginIcon({ name }: { name: 'mail' | 'lock' | 'eye' | 'eye-off' | 'users' }) {
+  const paths = {
+    mail: <><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m4 7 8 6 8-6" /></>,
+    lock: <><rect x="4" y="10" width="16" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2" /></>,
+    eye: <><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z" /><circle cx="12" cy="12" r="2.5" /></>,
+    'eye-off': <><path d="m3 3 18 18M10.6 6.2A10.6 10.6 0 0 1 12 6c6.5 0 10 6 10 6a16 16 0 0 1-3.1 3.7M6.2 6.4C3.4 8 2 12 2 12s3.5 6 10 6c1.1 0 2.1-.2 3-.5" /><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" /></>,
+    users: <><path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2m2-13a4 4 0 1 0 8 0 4 4 0 0 0-8 0Zm10 3a4 4 0 0 0 0-7.8m4 17v-2a4 4 0 0 0-3-3.9" /></>,
+  };
+  return <svg className={`login-icon icon-${name}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
 }
 
 function Shell() {
@@ -52,6 +144,8 @@ function Shell() {
   useEffect(() => {
     const onShortcut = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        const target = event.target;
+        if (target instanceof HTMLElement && (target.isContentEditable || target.closest('input, textarea, select, [contenteditable="true"]'))) return;
         event.preventDefault();
         if (paletteOpen) {
           setPaletteOpen(false);
@@ -64,21 +158,33 @@ function Shell() {
   }, [paletteOpen]);
   if (me.isLoading) return <main className="pad"><Skeleton /></main>;
   if (me.error instanceof ApiError && me.error.status === 401) return <Navigate to="/login" replace />;
+  if (me.error instanceof ApiError && me.error.status === 0) return <Login apiUnavailable retry={() => { void me.refetch(); }} retrying={me.isFetching} />;
   if (me.error) return <main className="pad"><ErrorState error={me.error} retry={() => me.refetch()} /></main>;
   const logout = async () => {
     try { await api('/auth/logout', { method: 'POST' }); qc.clear(); nav('/login'); }
     catch { toast('err', 'Could not sign out. Check your connection and try again.'); }
   };
   const canCreate = me.data!.memberships.some((m) => atLeast(m.role, 'MEMBER'));
+  const pageContext = loc.pathname === '/teams'
+    ? 'Teams'
+    : loc.pathname === '/items/new'
+      ? 'New work item'
+      : loc.pathname.startsWith('/items/')
+        ? 'Work item'
+        : 'Operations';
   return <div className="shell min-h-screen">
-    <aside aria-label="Sidebar"><div className="brand"><span className="logo" aria-hidden>N</span>Newtonite Ops</div>
-      <nav aria-label="Main"><NavLink to="/" end>Work</NavLink><NavLink to="/teams">Teams</NavLink></nav>
-      <div className="me"><span className="eyebrow">Signed in</span><strong>{me.data!.user.name}</strong><span className="muted small">{[...new Set(me.data!.memberships.map((m) => m.role))].join(' · ')}</span><button className="link" onClick={logout}>Sign out</button></div></aside>
+    <aside aria-label="Sidebar"><div className="brand"><span className="logo" aria-hidden>N</span><span className="brand-name">Newtonite Ops</span></div>
+      <nav aria-label="Main">
+        <NavLink to="/" end aria-label="Work dashboard" title="Work dashboard"><svg className="rail-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1" /><rect x="14" y="4" width="6" height="6" rx="1" /><rect x="4" y="14" width="6" height="6" rx="1" /><rect x="14" y="14" width="6" height="6" rx="1" /></svg><span>Work</span></NavLink>
+        <NavLink to="/teams" aria-label="Teams" title="Teams"><svg className="rail-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3" /><circle cx="17" cy="9" r="2.5" /><path d="M3.5 19c.4-3 2.2-4.5 5.5-4.5s5.1 1.5 5.5 4.5M14.5 15c3.5-.8 5.5.7 6 3.5" /></svg><span>Teams</span></NavLink>
+      </nav>
+      <div className="me"><span className="eyebrow">Signed in</span><span className="rail-avatar" aria-hidden="true">{me.data!.user.name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase()}</span><strong>{me.data!.user.name}</strong><span className="muted small">{[...new Set(me.data!.memberships.map((m) => m.role))].join(' · ')}</span><button className="link" onClick={logout}>Sign out</button></div></aside>
     <main className="workspace" key={loc.pathname.startsWith('/items/') ? loc.pathname : 'x'}>
-      <header className="topbar"><div className="topbar-context"><span className="status-light" aria-hidden />Newtonite operations</div>
-        <div className="topbar-actions"><button className="command-trigger" data-command-trigger onClick={() => setPaletteOpen(true)} aria-haspopup="dialog"><span aria-hidden>⌕</span>Search or jump to…<kbd>Ctrl/Cmd K</kbd></button>
+      <header className="topbar"><div className="topbar-context"><span className="status-light" aria-hidden />Newtonite Ops <span className="topbar-divider" aria-hidden>/</span> <span aria-current="page">{pageContext}</span></div>
+        <div className="topbar-actions"><button className="command-trigger" data-command-trigger onClick={() => setPaletteOpen(true)} aria-haspopup="dialog" aria-keyshortcuts="Control+K Meta+K"><span aria-hidden>⌕</span>Search or jump to…<kbd>Ctrl/Cmd K</kbd></button>
             {canCreate && <Link className="btn primary topbar-create" to="/items/new" aria-label="Create a work item">＋ New work</Link>}
-          <span className="avatar" aria-label={`Signed in as ${me.data!.user.name}`}>{me.data!.user.name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase()}</span></div></header>
+          <span className="avatar" aria-label={`Signed in as ${me.data!.user.name}`}>{me.data!.user.name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase()}</span>
+          <button className="mobile-signout" onClick={logout}>Sign out</button></div></header>
       <OutletBridge />
     </main>
     <CommandPalette open={paletteOpen} canCreate={canCreate} onClose={() => setPaletteOpen(false)} />
@@ -143,13 +249,25 @@ function Dashboard() {
       toast('ok', `Saved “${name}” on this browser`);
     }
   };
-  return <div className="pad">
-    <header className="head"><div><p className="eyebrow">Command center / Work</p><h1>Operational overview</h1><p className="muted">Your team’s live work queue, scoped to your access.</p></div>{canCreate && <Link className="btn primary" to="/items/new">＋ Create work item</Link>}</header>
-    <section className="metrics" aria-label="Summary">{sum.isLoading ? <Skeleton rows={1} /> : sum.error ? <ErrorState error={sum.error} retry={() => sum.refetch()} /> : <>
-      <button onClick={() => setSp({ assigneeId: String(me.user.id), active: 'true' })}><b>{sum.data!.assignedToMe}</b>Assigned to me</button>
-      <button onClick={() => setSp({ approvable: 'true' })}><b>{sum.data!.awaitingMyApproval}</b>Awaiting my approval</button>
-      <button className={sum.data!.unassignedUrgent ? 'hot' : ''} onClick={() => setSp({ unassigned: 'true', priority: 'URGENT', active: 'true' })}><b>{sum.data!.unassignedUrgent}</b>Unassigned urgent</button>
-      <button className={sum.data!.overdue ? 'hot' : ''} onClick={() => setSp({ overdue: 'true' })}><b>{sum.data!.overdue}</b>Overdue</button></>}</section>
+  const selectRadarStatus = (status: Status) => {
+    set('status', f.status === status ? '' : status);
+    document.getElementById('queue-title')?.scrollIntoView?.({ behavior: 'auto', block: 'start' });
+  };
+  return <div className="pad dashboard">
+    <header className="head hero-head"><div><p className="eyebrow">Aether / Operations control</p><h1>Operational overview</h1><p className="muted">Clarity across every moving part. A team-scoped view of the work in motion.</p></div><div className="hero-actions">{canCreate && <Link className="btn primary" to="/items/new">＋ Create work item</Link>}<span className="scope-stamp"><span>ACCESS SCOPE</span><b>Your team memberships</b></span></div></header>
+    <div className="command-deck">
+      <OperationsRadar items={rows} hasMore={!!list.hasNextPage} loading={list.isLoading} selectedStatus={f.status} onSelectStatus={selectRadarStatus} />
+      <div className="command-stack">
+        <section className="metrics" aria-label="Summary">{sum.isLoading ? <Skeleton rows={1} /> : sum.error ? <ErrorState error={sum.error} retry={() => sum.refetch()} /> : <>
+          <button onClick={() => setSp({ assigneeId: String(me.user.id), active: 'true' })}><b>{sum.data!.assignedToMe}</b><span>Assigned to me</span><small>Active across your teams</small></button>
+          <button onClick={() => setSp({ approvable: 'true' })}><b>{sum.data!.awaitingMyApproval}</b><span>Awaiting my approval</span><small>In your approval queue</small></button>
+          <button className={sum.data!.unassignedUrgent ? 'hot' : ''} onClick={() => setSp({ unassigned: 'true', priority: 'URGENT', active: 'true' })}><b>{sum.data!.unassignedUrgent}</b><span>Unassigned urgent</span><small>Active, without an owner</small></button>
+          <button className={sum.data!.overdue ? 'hot' : ''} onClick={() => setSp({ overdue: 'true' })}><b>{sum.data!.overdue}</b><span>Overdue</span><small>Past due and unresolved</small></button></>}</section>
+        <OperationalInsights summary={sum.data} loading={sum.isLoading} retry={() => sum.refetch()} />
+      </div>
+    </div>
+    <section className="queue-section" aria-labelledby="queue-title">
+    <header className="queue-heading"><div><p className="eyebrow">Queue / Team-scoped work</p><h2 id="queue-title">Work queue</h2></div><span className="queue-count">{rows.length} loaded{list.hasNextPage ? ' · more available' : ''}</span></header>
     <div className="filters" role="search">
       <span className="filter-label">Filter work</span>
       <input aria-label="Search work items" placeholder="Search title, description or OPS-00001" value={qText} onChange={(e) => setQText(e.target.value)} />
@@ -172,11 +290,75 @@ function Dashboard() {
     {list.isLoading ? <Skeleton /> : list.error ? <ErrorState error={list.error} retry={() => list.refetch()} /> : rows.length === 0 ? <Empty title="No work items match" hint={filtered ? 'Try clearing a filter.' : 'Create the first item to get started.'} /> :
       <div className="tablewrap"><table><thead><tr><th>Ref</th><th>Title</th><th>Status</th><th>Priority</th><th>Assignee</th><th>Due</th><th>Updated</th></tr></thead><tbody>
         {rows.map((i) => <tr key={i.id} tabIndex={0} onClick={() => nav(`/items/${i.id}`)} onKeyDown={(e) => e.key === 'Enter' && nav(`/items/${i.id}`)}>
-          <td className="mono">{i.reference}</td><td><Link to={`/items/${i.id}`} onClick={(e) => e.stopPropagation()}>{i.title}</Link></td><td><StatusBadge s={i.status} /></td>
-          <td><PriorityTag p={i.priority} /></td><td>{i.assignee_name ?? <span className={i.priority === 'URGENT' ? 'flag' : 'muted'}>Unassigned</span>}</td>
-          <td>{i.due_at ? <span className={isOverdue(i.due_at, i.status) ? 'flag' : ''}>{isOverdue(i.due_at, i.status) ? 'Overdue ' : ''}{ago(i.due_at)}</span> : '—'}</td><td className="muted">{ago(i.updated_at)}</td></tr>)}
+          <td className="mono" data-label="Reference">{i.reference}</td><td data-label="Work item"><Link to={`/items/${i.id}`} onClick={(e) => e.stopPropagation()}>{i.title}</Link></td><td data-label="Status"><StatusBadge s={i.status} /></td>
+          <td data-label="Priority"><PriorityTag p={i.priority} /></td><td data-label="Owner">{i.assignee_name ?? <span className={i.priority === 'URGENT' ? 'flag' : 'muted'}>Unassigned</span>}</td>
+          <td data-label="Due">{i.due_at ? <span className={isOverdue(i.due_at, i.status) ? 'flag' : ''}>{isOverdue(i.due_at, i.status) ? 'Overdue ' : ''}{ago(i.due_at)}</span> : '—'}</td><td className="muted" data-label="Updated">{ago(i.updated_at)}</td></tr>)}
       </tbody></table>{list.hasNextPage && <div className="row center"><button className="btn" onClick={() => list.fetchNextPage()} disabled={list.isFetchingNextPage}>{list.isFetchingNextPage ? 'Loading…' : 'Load more'}</button></div>}</div>}
+    </section>
   </div>;
+}
+
+function OperationsRadar({ items, hasMore, loading, selectedStatus, onSelectStatus }: { items: Item[]; hasMore: boolean; loading: boolean; selectedStatus: string; onSelectStatus: (status: Status) => void }) {
+  const distribution = STATUSES.map((status) => ({
+    status,
+    count: items.filter((item) => item.status === status).length,
+  }));
+  const total = items.length;
+  return <section className="radar-panel" aria-labelledby="radar-title">
+    <header className="panel-heading"><div><p className="eyebrow">Aether nexus / Workflow field</p><h2 id="radar-title">Operations core</h2></div><span className="panel-index">{loading ? 'SYNC' : `${total.toString().padStart(2, '0')} IN SCOPE`}</span></header>
+    {loading ? <Skeleton rows={3} /> : <>
+      <div className="radar-content">
+        <svg className="radar-chart" viewBox="0 0 240 240" role="img" aria-labelledby="radar-svg-title radar-svg-desc">
+          <title id="radar-svg-title">Work distribution by workflow status</title>
+          <desc id="radar-svg-desc">{distribution.map(({ status, count }) => `${status.replace(/_/g, ' ')}: ${count}`).join('; ')} among {total} currently loaded work items.</desc>
+          <circle cx="120" cy="120" r="104" className="radar-outline" />
+          <circle cx="120" cy="120" r="21" className="radar-outline" />
+          <path d="M120 16v208M16 120h208M46 46l148 148M194 46 46 194" className="radar-crosshair" />
+          {distribution.map(({ status, count }, index) => {
+            const radius = 96 - index * 15;
+            const circumference = 2 * Math.PI * radius;
+            const filled = total ? (count / total) * circumference : 0;
+            return <g key={status} transform="rotate(-90 120 120)">
+              <circle cx="120" cy="120" r={radius} className="radar-track" />
+              <circle cx="120" cy="120" r={radius} className={`radar-value radar-${status.toLowerCase()}`} strokeDasharray={`${filled} ${circumference}`} />
+            </g>;
+          })}
+          <text x="120" y="115" className="radar-total">{total}</text>
+          <text x="120" y="132" className="radar-caption">IN SCOPE</text>
+          <path d="M104 145h32" className="radar-center-tick" />
+        </svg>
+        <ul className="radar-legend" aria-label="Work item status counts">
+          {distribution.map(({ status, count }) => <li key={status}>
+            <button className={`radar-select${selectedStatus === status ? ' is-selected' : ''}`} type="button" aria-pressed={selectedStatus === status} onClick={() => onSelectStatus(status)}>
+              <span className={`radar-key radar-${status.toLowerCase()}`} aria-hidden="true" />
+              <span>{status.replace(/_/g, ' ')}</span>
+              <strong>{count}</strong>
+            </button>
+          </li>)}
+        </ul>
+      </div>
+      <p className="radar-footnote">{total ? `Distribution of ${total} work item${total === 1 ? '' : 's'} loaded for this queue view.` : 'No work items are currently loaded for this view.'}{hasMore ? ' Load more to extend the sample.' : ''}</p>
+    </>}
+  </section>;
+}
+
+function OperationalInsights({ summary, loading, retry }: { summary?: DashboardSummary; loading: boolean; retry: () => void }) {
+  const insights = summary ? [
+    { count: summary.overdue, title: 'Past due', reason: 'Unresolved work has passed its due date.', href: '/?overdue=true', tone: 'warning' },
+    { count: summary.unassignedUrgent, title: 'Urgent without an owner', reason: 'Urgent active work is still unassigned.', href: '/?unassigned=true&priority=URGENT&active=true', tone: 'critical' },
+    { count: summary.awaitingMyApproval, title: 'Approval gate', reason: 'Items are waiting in your approval queue.', href: '/?approvable=true', tone: 'attention' },
+  ].filter((insight) => insight.count > 0) : [];
+  return <section className="insights-panel" aria-labelledby="insights-title">
+    <header className="panel-heading"><div><p className="eyebrow">Decision support / Verified data</p><h2 id="insights-title">Operational signals</h2></div><span className="insight-mark" aria-hidden="true">◎</span></header>
+    {loading ? <Skeleton rows={3} /> : summary ? <>
+      <p className="insight-method">Rule-based signals from your team-scoped API summary. No predictions or historical comparisons.</p>
+      {insights.length ? <ul className="insight-list">{insights.map((insight) => <li key={insight.title} className={`insight-item ${insight.tone}`}>
+        <span className="insight-count">{insight.count}</span>
+        <div><h3>{insight.title}</h3><p>{insight.reason}</p><Link to={insight.href}>Review matching work <span aria-hidden="true">↗</span></Link></div>
+      </li>)}</ul> : <div className="insight-clear"><span aria-hidden="true">✓</span><div><strong>No flagged signals</strong><p className="muted">The verified summary has no overdue, unassigned urgent, or awaiting-approval items.</p></div></div>}
+      <p className="insight-footnote">Counts reflect memberships visible to your account.</p>
+    </> : <div className="insight-clear"><span aria-hidden="true">·</span><div><strong>Signals unavailable</strong><p className="muted">A verified operational summary could not be loaded.</p><button className="link" onClick={retry}>Retry summary</button></div></div>}
+  </section>;
 }
 
 function CreateItem() {
@@ -226,6 +408,16 @@ function ItemDetail() {
   const i = item.data; const role = me.memberships.find((m) => m.team_id === i?.team_id)?.role;
   const f = form ?? (i ? { title: i.title, description: i.description, priority: i.priority, assigneeId: i.assignee_id ? String(i.assignee_id) : '' } : null);
   const refresh = () => { ['items', 'summary', 'activity'].forEach((k) => qc.invalidateQueries({ queryKey: [k] })); };
+  const reloadLatest = async () => {
+    const latest = await item.refetch();
+    if (latest.error) {
+      toast('err', 'Could not reload the latest version. Your draft is still available.');
+      return;
+    }
+    await act.refetch();
+    setConflict(false);
+    setForm(null);
+  };
   const run = useMutation({
     mutationFn: ({ fn }: { fn: () => Promise<Item | Comment>; ok: string }) => fn(),
     onSuccess: (r, { ok }) => { if ('version' in r) qc.setQueryData(['item', id], r); setForm(null); setConfirm(null); setConflict(false); refresh(); toast('ok', ok); },
@@ -236,7 +428,8 @@ function ItemDetail() {
     },
   });
   if (item.isLoading) return <div className="pad"><Skeleton /></div>;
-  if (item.error || !i || !f) return <div className="pad"><ErrorState error={item.error} retry={() => item.refetch()} /></div>;
+  const accessError = item.error instanceof ApiError && [401, 403, 404].includes(item.error.status);
+  if (!i || !f || accessError) return <div className="pad"><ErrorState error={item.error} retry={() => item.refetch()} /></div>;
   const canEdit = atLeast(role, 'MEMBER'); const canClaim = canEdit && !i.assignee_id && (i.status === 'OPEN' || i.status === 'IN_PROGRESS');
   const nextOpts = (Object.entries(NEXT[i.status]) as [Status, 'MEMBER' | 'LEAD'][]).filter(([, r]) => atLeast(role, r));
   const patch = () => run.mutate({ ok: 'Changes saved', fn: () => api<Item>(`/items/${i.id}`, { method: 'PATCH', body: { expectedVersion: i.version, title: f.title, description: f.description, priority: f.priority, ...(atLeast(role, 'LEAD') ? { assigneeId: f.assigneeId ? Number(f.assigneeId) : null } : {}) } }) });
@@ -247,7 +440,11 @@ function ItemDetail() {
       <div className="row gap">{canClaim && <button className="btn primary" disabled={run.isPending} onClick={() => run.mutate({ ok: 'You claimed this item', fn: () => api<Item>(`/items/${i.id}/claim`, { method: 'POST' }) })}>Claim</button>}
         {nextOpts.map(([to]) => <button key={to} className={`btn ${to === 'RESOLVED' ? 'primary' : ''}`} disabled={run.isPending} onClick={() => setConfirm(to)}>{i.status === 'AWAITING_APPROVAL' ? (to === 'RESOLVED' ? 'Approve' : 'Request changes') : `Move to ${to.replace(/_/g, ' ').toLowerCase()}`}</button>)}</div></header>
     {!canEdit && <p className="alert warn">You have read-only access to this team.</p>}
-    {conflict && <div className="alert err" role="alert">This item was changed by someone else, so your edit was not saved. Your text is still below. <button className="link" onClick={() => { item.refetch(); act.refetch(); setConflict(false); setForm(null); }}>Reload latest (discards your edits)</button></div>}
+    {conflict && <div className="conflict-panel" role="alert">
+      <div><strong>This item changed while you were editing.</strong><p>Your update was not saved. Your draft remains in the fields below.</p></div>
+      <button className="conflict-reload" disabled={item.isFetching} onClick={() => { void reloadLatest(); }}>{item.isFetching ? 'Loading latest…' : <>Reload latest <span>(discard draft)</span></>}</button>
+    </div>}
+    {item.error && <p className="alert warn" role="alert">The latest server version could not be loaded. The last available version remains visible; retry before making further changes. <button className="link" onClick={() => { void item.refetch(); }}>Retry</button></p>}
     <div className="cols"><section>
       <form className="form" onSubmit={(e) => { e.preventDefault(); patch(); }}>
         <label>Title<input value={f.title} disabled={!canEdit} onChange={(e) => setForm({ ...f, title: e.target.value })} /></label>
@@ -263,7 +460,7 @@ function ItemDetail() {
     </section>
     <aside className="side" aria-label="Item details"><dl><dt>Team</dt><dd>{teamsQ.data?.data.find((t) => t.id === i.team_id)?.name ?? `#${i.team_id}`}</dd><dt>Assignee</dt><dd>{assignee ?? (i.assignee_id ? '—' : 'Unassigned')}</dd><dt>Due</dt><dd>{i.due_at ? new Date(i.due_at).toLocaleString() : '—'}</dd><dt>Created</dt><dd>{new Date(i.created_at).toLocaleString()}</dd><dt>Updated</dt><dd>{ago(i.updated_at)} (v{i.version})</dd></dl>
       <h2>Activity</h2>{act.isLoading ? <Skeleton rows={3} /> : act.error ? <ErrorState error={act.error} retry={() => act.refetch()} /> :
-        <ol className="timeline">{act.data!.data.map((a) => <li key={a.id}><b>{a.actor_name}</b> {describe(a)}{a.metadata?.note && <em> — “{a.metadata.note}”</em>}<span className="muted small">{ago(a.created_at)}</span></li>)}</ol>}</aside></div>
+        <ol className="timeline">{act.data!.data.map((a) => <li className={`event-${a.event_type.toLowerCase()}`} key={a.id}><b>{a.actor_name}</b> {describe(a)}{a.metadata?.note && <em> — “{a.metadata.note}”</em>}<span className="muted small">{ago(a.created_at)}</span></li>)}</ol>}</aside></div>
     <Confirm open={!!confirm} busy={run.isPending} title={confirm === 'RESOLVED' ? 'Approve and resolve?' : `Move to ${confirm?.replace(/_/g, ' ').toLowerCase()}?`} body={`This changes the status of ${i.reference} and is recorded in its activity history.`}
       onNo={() => setConfirm(null)} onYes={() => confirm && run.mutate({ ok: 'Status updated', fn: () => api<Item>(`/items/${i.id}/transition`, { method: 'POST', body: { to: confirm, expectedVersion: i.version } }) })} />
   </div>;

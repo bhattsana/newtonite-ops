@@ -95,6 +95,16 @@ describe('dashboard', () => {
     await u.selectOptions(views, savedOption.value);
     expect(screen.getByLabelText('Priority')).toHaveValue('URGENT');
   });
+  it('filters the queue when a workflow status is selected in the Operations Core', async () => {
+    await session('member'); const u = userEvent.setup(); view('/');
+    await screen.findAllByText(/^OPS-\d{5}$/);
+    await u.click(screen.getByRole('button', { name: /OPEN/ }));
+    await waitFor(() => expect(screen.getByLabelText('Status')).toHaveValue('OPEN'));
+    await waitFor(() => {
+      const rows = screen.getAllByRole('row').slice(1);
+      rows.forEach((row) => expect(row).toHaveTextContent('Open'));
+    });
+  });
   it('search is sent to the server and filters rows; reset restores them', async () => {
     await session('member'); const u = userEvent.setup(); view('/');
     await screen.findAllByText(/^OPS-\d{5}$/);

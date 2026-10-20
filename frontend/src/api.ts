@@ -1,6 +1,7 @@
 import type { Role, Status } from "./types";
 
 const BASE = ((import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "http://localhost:8000").replace(/\/$/, "");
+export const API_ORIGIN = new URL(BASE).origin;
 
 export class ApiError extends Error {
   constructor(public status: number, public code: string, message: string, public details?: unknown) {

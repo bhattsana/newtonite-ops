@@ -23,7 +23,7 @@ services:
       APP_ENV: development
       DATABASE_URL: postgresql+psycopg://newtonite:${POSTGRES_PASSWORD:-local_dev_only}@db:5432/newtonite
       SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET to a random local value before starting Compose}
-      CORS_ORIGINS: http://localhost:5173
+      CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
       COOKIE_SECURE: "false"
       PORT: "8000"
     ports:
