@@ -95,6 +95,7 @@ def list_items(
     q: str | None = Query(default=None, max_length=100),
     overdue: bool = False,
     priority: str | None = None,
+    high_priority: bool = Query(default=False, alias="highPriority"),
     type: str | None = Query(default=None, max_length=40),
     unassigned: bool = False,
     active: bool = False,
@@ -123,6 +124,8 @@ def list_items(
         stmt = stmt.where(WorkItem.id < cursor)
     if priority:
         stmt = stmt.where(WorkItem.priority == priority)
+    if high_priority:
+        stmt = stmt.where(WorkItem.priority.in_(("HIGH", "URGENT")))
     if type:
         stmt = stmt.where(WorkItem.type == type)
     if unassigned:

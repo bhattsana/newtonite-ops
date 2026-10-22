@@ -5,17 +5,21 @@ import { useNavigate } from 'react-router-dom';
 import { api } from './api';
 import type { Item, ItemList } from './api';
 
-type Props = { open: boolean; canCreate: boolean; onClose: () => void };
+type Props = { open: boolean; canCreate: boolean; userId: number; onRefresh: () => void; onClose: () => void };
 
-export function CommandPalette({ open, canCreate, onClose }: Props) {
+export function CommandPalette({ open, canCreate, userId, onRefresh, onClose }: Props) {
   const [query, setQuery] = useState('');
   const input = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
   const search = query.trim();
   const normalizedSearch = search.toLocaleLowerCase();
-  const commands = [
+  const commands: { label: string; keywords: string; path?: string; action?: () => void }[] = [
     { label: 'Work dashboard', keywords: 'home overview', path: '/' },
     { label: 'Open work queue', keywords: 'active queue items', path: '/?active=true' },
+    { label: 'Assigned to me', keywords: 'my work queue owner', path: `/?assigneeId=${userId}&active=true` },
+    { label: 'Urgent unassigned work', keywords: 'high priority nobody owner', path: '/?unassigned=true&highPriority=true&active=true' },
+    { label: 'Awaiting my approval', keywords: 'approve review pending', path: '/?approvable=true' },
+    { label: 'Refresh dashboard data', keywords: 'reload sync update', action: onRefresh },
     { label: 'Teams', keywords: 'members team', path: '/teams' },
     ...(canCreate ? [{ label: 'Create a work item', keywords: 'new create task', path: '/items/new' }] : []),
   ].filter((command) => `${command.label} ${command.keywords}`.toLocaleLowerCase().includes(normalizedSearch));
@@ -42,6 +46,14 @@ export function CommandPalette({ open, canCreate, onClose }: Props) {
     close();
     navigate(path);
   };
+  const runCommand = (command: (typeof commands)[number]) => {
+    if (command.action) {
+      close();
+      command.action();
+    } else if (command.path) {
+      visit(command.path);
+    }
+  };
   const onKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
     if (event.key === 'Escape') {
       event.preventDefault();
@@ -59,7 +71,7 @@ export function CommandPalette({ open, canCreate, onClose }: Props) {
       }
     }
     if (event.key === 'Enter' && event.target === input.current) {
-      if (search && commands.length === 1) visit(commands[0].path);
+      if (search && commands.length === 1) runCommand(commands[0]);
       else if (results.data?.data.length === 1) visit(`/items/${results.data.data[0].id}`);
     }
     if (event.key !== 'Tab') return;
@@ -82,7 +94,7 @@ export function CommandPalette({ open, canCreate, onClose }: Props) {
       <input id="command-search" ref={input} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search work or jump to a page…" />
       {commands.length > 0 && <div className="palette-group" role="group" aria-label="Commands">
         <p className="eyebrow">{search ? 'Matching commands' : 'Commands'}</p>
-        {commands.map((command) => <button data-palette-option key={command.path} onClick={() => visit(command.path)}>{command.label}</button>)}
+        {commands.map((command) => <button data-palette-option key={command.label} onClick={() => runCommand(command)}>{command.label}</button>)}
       </div>}
       {search.length >= 2 && <div className="palette-group" role="group" aria-label="Work item results">
         <p className="eyebrow">Matching work</p>

@@ -93,6 +93,12 @@ export type {
   Activity,
   Comment,
   DashboardSummary,
+  IntelligenceItem,
+  DeadlineItem,
+  Bottleneck,
+  TeamWorkload,
+  AssigneeWorkload,
+  TrendDay,
 } from "./types";
 
 const RANK: Record<Role, number> = { VIEWER: 1, MEMBER: 2, LEAD: 3, ADMIN: 4 };

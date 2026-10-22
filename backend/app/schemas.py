@@ -109,6 +109,91 @@ class TeamOut(BaseModel):
     role: Role
 
 
+class DashboardStatusCounts(BaseModel):
+    OPEN: int
+    IN_PROGRESS: int
+    AWAITING_APPROVAL: int
+    RESOLVED: int
+    CLOSED: int
+
+
+class IntelligenceItemOut(BaseModel):
+    id: int
+    reference: str
+    title: str
+    status: Status
+    priority: Priority
+    teamId: int
+    teamName: str
+    assigneeName: str | None
+    dueAt: datetime | None
+    score: int
+    factors: list[str]
+    statusAgeDays: int
+
+
+class DeadlineItemOut(BaseModel):
+    id: int
+    reference: str
+    title: str
+    status: Status
+    priority: Priority
+    dueAt: datetime
+    teamId: int
+    teamName: str
+    assigneeName: str | None
+    risk: Literal["OVERDUE", "AT_RISK", "UPCOMING"]
+
+
+class BottleneckOut(BaseModel):
+    key: str
+    title: str
+    count: int
+    evidence: str
+    recommendation: str
+    status: Status
+
+
+class TeamWorkloadOut(BaseModel):
+    teamId: int
+    teamName: str
+    active: int
+    highPriority: int
+    unassigned: int
+    overdue: int
+    awaitingApproval: int
+
+
+class AssigneeWorkloadOut(BaseModel):
+    assigneeId: int
+    assigneeName: str
+    active: int
+    highPriority: int
+
+
+class TrendDayOut(BaseModel):
+    date: str
+    created: int
+    completed: int
+
+
+class DashboardSummaryOut(BaseModel):
+    critical_high: int = Field(alias="criticalHigh")
+    assigned_to_me: int = Field(alias="assignedToMe")
+    unassigned_urgent: int = Field(alias="unassignedUrgent")
+    awaiting_my_approval: int = Field(alias="awaitingMyApproval")
+    overdue: int
+    active_total: int = Field(alias="activeTotal")
+    status_counts: DashboardStatusCounts = Field(alias="statusCounts")
+    last_updated_at: datetime | None = Field(alias="lastUpdatedAt")
+    intelligence: list[IntelligenceItemOut]
+    deadline_watch: list[DeadlineItemOut] = Field(alias="deadlineWatch")
+    bottlenecks: list[BottleneckOut]
+    team_workload: list[TeamWorkloadOut] = Field(alias="teamWorkload")
+    assignee_workload: list[AssigneeWorkloadOut] = Field(alias="assigneeWorkload")
+    trends: list[TrendDayOut]
+
+
 class MemberOut(BaseModel):
     id: int
     name: str

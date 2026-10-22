@@ -40,6 +40,9 @@ describe('login', () => {
     const s = (await raw('GET', '/dashboard/summary')).body;
     expect(await screen.findByRole('button', { name: /Assigned to me/ })).toHaveTextContent(String(s.assignedToMe));
     expect(screen.getByRole('button', { name: /Overdue/ })).toHaveTextContent(String(s.overdue));
+    expect(screen.getByRole('button', { name: /High \+ urgent/ })).toHaveTextContent(String(s.criticalHigh));
+    expect(screen.getByRole('heading', { name: 'Team workload pulse' })).toBeInTheDocument();
+    expect(screen.getByText(/Last updated:/)).toBeInTheDocument();
     expect(await screen.findAllByText(/^OPS-\d{5}$/)).not.toHaveLength(0);
   });
   it('shows a clear message when sign-in is throttled after repeated failures', async () => {
@@ -59,6 +62,10 @@ describe('dashboard', () => {
     await u.keyboard('{Control>}k{/Control}');
     const dialog = await screen.findByRole('dialog', { name: 'Command center' });
     expect(within(dialog).getByRole('button', { name: /Work dashboard/ })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /Assigned to me/ })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /Urgent unassigned work/ })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /Awaiting my approval/ })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /Refresh dashboard data/ })).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: /Teams/ })).toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: 'Create a work item' })).not.toBeInTheDocument();
     await u.click(within(dialog).getByRole('button', { name: /Teams/ }));
@@ -104,6 +111,33 @@ describe('dashboard', () => {
       const rows = screen.getAllByRole('row').slice(1);
       rows.forEach((row) => expect(row).toHaveTextContent('Open'));
     });
+  });
+  it('uses server-wide high and urgent counts to filter the real queue', async () => {
+    const tok = await session('member');
+    const highTitle = uniq('Dashboard high');
+    const urgentTitle = uniq('Dashboard urgent');
+    const lowTitle = uniq('Dashboard low');
+    await mkItem(tok, highTitle, { priority: 'HIGH' });
+    await mkItem(tok, urgentTitle, { priority: 'URGENT' });
+    await mkItem(tok, lowTitle, { priority: 'LOW' });
+    const u = userEvent.setup(); view('/');
+    await screen.findByRole('heading', { name: 'Operational overview' });
+    await u.click(screen.getByRole('button', { name: /High \+ urgent.*Active across your teams/ }));
+    expect(await screen.findByText(highTitle)).toBeInTheDocument();
+    expect(await screen.findByText(urgentTitle)).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText(lowTitle)).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Remove filter: high and urgent priority' })).toBeInTheDocument();
+  });
+  it('explains ranked work and opens the real work item', async () => {
+    const tok = await session('member');
+    const title = uniq('Intelligence item');
+    const item = await mkItem(tok, title, { priority: 'URGENT', dueAt: new Date(Date.now() - 60_000).toISOString() });
+    const u = userEvent.setup(); view('/');
+    await screen.findByRole('heading', { name: 'Operations intelligence' });
+    const itemLink = await screen.findByRole('link', { name: new RegExp(title) });
+    await u.click(itemLink);
+    expect(await screen.findByRole('heading', { name: title })).toBeInTheDocument();
+    expect(item.id).toBeTruthy();
   });
   it('search is sent to the server and filters rows; reset restores them', async () => {
     await session('member'); const u = userEvent.setup(); view('/');

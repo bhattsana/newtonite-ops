@@ -1,9 +1,11 @@
 import secrets
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
+from app.api.dashboard import deadline_risk, priority_assessment
 from app.config import get_settings
 from app.models import ActivityEvent, IdempotencyRecord, OutboxJob, WorkItem
 from app.tests.conftest import TestSession
@@ -254,6 +256,157 @@ def test_filters_search_cursor_and_dashboard(client, identities):
         {row["id"] for row in next_page["data"]}
     )
     summary = client.get("/api/v1/dashboard/summary").json()
-    assert set(summary) == {
-        "assignedToMe", "unassignedUrgent", "awaitingMyApproval", "overdue"
+    assert summary["unassignedUrgent"] == 1
+    assert summary["statusCounts"]["OPEN"] >= 4
+    assert summary["activeTotal"] >= 4
+    assert summary["lastUpdatedAt"] is not None
+    assert sum(day["created"] for day in summary["trends"]) >= 4
+    assert any(item["title"] == "Queue marker 0" for item in summary["intelligence"])
+    assert any(row["teamId"] == identities["team_id"] for row in summary["teamWorkload"])
+
+
+def test_dashboard_summary_counts_active_work_and_respects_team_roles(
+    client, identities, create_work_item
+):
+    member_id = identities["users"]["member"]["id"]
+    team_id = identities["team_id"]
+    other_team_id = identities["other_team_id"]
+    past = datetime.now(UTC) - timedelta(days=1)
+    with TestSession() as db:
+        create_work_item(
+            db, team_id, member_id, title="High open overdue", priority="HIGH", due_at=past
+        )
+        create_work_item(
+            db, team_id, member_id, title="Urgent assigned", priority="URGENT",
+            status="IN_PROGRESS", assignee_id=member_id, due_at=past,
+        )
+        create_work_item(
+            db, team_id, member_id, title="Approval high", priority="HIGH",
+            status="AWAITING_APPROVAL", created_at=past - timedelta(days=3),
+        )
+        create_work_item(
+            db, team_id, member_id, title="Assigned low", priority="LOW", assignee_id=member_id
+        )
+        create_work_item(
+            db, team_id, member_id, title="Resolved urgent", priority="URGENT",
+            status="RESOLVED", assignee_id=member_id, due_at=past,
+        )
+        create_work_item(
+            db, team_id, member_id, title="Closed high", priority="HIGH", status="CLOSED"
+        )
+        create_work_item(
+            db, other_team_id, identities["users"]["outsider"]["id"],
+            title="Restricted urgent", priority="URGENT",
+        )
+
+    sign_in(client, identities["users"]["member"]["email"])
+    summary = client.get("/api/v1/dashboard/summary").json()
+    assert summary["criticalHigh"] == 3
+    assert summary["assignedToMe"] == 2
+    assert summary["unassignedUrgent"] == 2
+    assert summary["awaitingMyApproval"] == 0
+    assert summary["overdue"] == 2
+    assert summary["activeTotal"] == 4
+    assert summary["statusCounts"] == {
+        "OPEN": 2,
+        "IN_PROGRESS": 1,
+        "AWAITING_APPROVAL": 1,
+        "RESOLVED": 1,
+        "CLOSED": 1,
     }
+    assert "BLOCKED" not in summary["statusCounts"]
+    assert {item["title"] for item in summary["intelligence"]} <= {
+        "High open overdue", "Urgent assigned", "Approval high", "Assigned low"
+    }
+    assert summary["deadlineWatch"][0]["risk"] == "OVERDUE"
+    assert summary["teamWorkload"] == [{
+        "teamId": team_id,
+        "teamName": summary["teamWorkload"][0]["teamName"],
+        "active": 4,
+        "highPriority": 3,
+        "unassigned": 2,
+        "overdue": 2,
+        "awaitingApproval": 1,
+    }]
+
+    high_priority = client.get("/api/v1/items?highPriority=true&active=true").json()["data"]
+    assert {item["title"] for item in high_priority} == {
+        "High open overdue", "Urgent assigned", "Approval high"
+    }
+    assert all(item["team_id"] == team_id for item in high_priority)
+
+    lead = TestClient(client.app)
+    sign_in(lead, identities["users"]["lead"]["email"])
+    lead_summary = lead.get("/api/v1/dashboard/summary").json()
+    assert lead_summary["awaitingMyApproval"] == 1
+    assert any(row["key"] == "aging-approvals" for row in lead_summary["bottlenecks"])
+    approval_queue = lead.get("/api/v1/items?approvable=true").json()["data"]
+    assert [item["title"] for item in approval_queue] == ["Approval high"]
+
+
+def test_dashboard_summary_empty_team_returns_zero_counts(client, identities):
+    sign_in(client, identities["users"]["member"]["email"])
+    summary = client.get("/api/v1/dashboard/summary").json()
+    assert summary["criticalHigh"] == 0
+    assert summary["assignedToMe"] == 0
+    assert summary["unassignedUrgent"] == 0
+    assert summary["awaitingMyApproval"] == 0
+    assert summary["overdue"] == 0
+    assert summary["activeTotal"] == 0
+    assert summary["statusCounts"] == {
+        "OPEN": 0,
+        "IN_PROGRESS": 0,
+        "AWAITING_APPROVAL": 0,
+        "RESOLVED": 0,
+        "CLOSED": 0,
+    }
+    assert summary["lastUpdatedAt"] is None
+    assert summary["intelligence"] == []
+    assert summary["deadlineWatch"] == []
+    assert summary["bottlenecks"] == []
+    assert summary["teamWorkload"][0]["active"] == 0
+    assert summary["assigneeWorkload"] == []
+    assert len(summary["trends"]) == 14
+
+
+def test_priority_assessment_is_explainable_and_handles_missing_due_date():
+    now = datetime.now(UTC)
+    score, factors, age = priority_assessment(
+        priority="URGENT",
+        status="IN_PROGRESS",
+        due_at=now - timedelta(hours=1),
+        status_since=now - timedelta(days=8),
+        now=now,
+        assignee_id=None,
+    )
+    assert score == 91
+    assert age == 8
+    assert factors == [
+        "Urgent priority (+60 points)",
+        "Past its recorded due date (+25)",
+        "Unassigned (+5)",
+        "No status transition for 8 days (+10)",
+    ]
+    score, factors, age = priority_assessment(
+        priority="LOW",
+        status="OPEN",
+        due_at=None,
+        status_since=now,
+        now=now,
+        assignee_id=10,
+    )
+    assert score == 9
+    assert age == 0
+    assert factors == ["Low priority (+10 points)"]
+    assert deadline_risk(due_at=now - timedelta(seconds=1), now=now) == "OVERDUE"
+    assert deadline_risk(due_at=now + timedelta(hours=12), now=now) == "AT_RISK"
+    assert deadline_risk(due_at=now + timedelta(days=2), now=now) == "UPCOMING"
+    maximum_score, _, _ = priority_assessment(
+        priority="URGENT",
+        status="AWAITING_APPROVAL",
+        due_at=now - timedelta(hours=1),
+        status_since=now - timedelta(days=8),
+        now=now,
+        assignee_id=None,
+    )
+    assert maximum_score == 100

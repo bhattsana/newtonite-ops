@@ -187,7 +187,16 @@ function Shell() {
           <button className="mobile-signout" onClick={logout}>Sign out</button></div></header>
       <OutletBridge />
     </main>
-    <CommandPalette open={paletteOpen} canCreate={canCreate} onClose={() => setPaletteOpen(false)} />
+    <CommandPalette
+      open={paletteOpen}
+      canCreate={canCreate}
+      userId={me.data!.user.id}
+      onRefresh={() => {
+        void qc.invalidateQueries({ queryKey: ['summary'] });
+        void qc.invalidateQueries({ queryKey: ['items'] });
+      }}
+      onClose={() => setPaletteOpen(false)}
+    />
   </div>;
 }
 import { Outlet } from 'react-router-dom';
@@ -197,7 +206,7 @@ function Dashboard() {
   const me = useMe().data!; const [sp, setSp] = useSearchParams(); const nav = useNavigate(); const toast = useToast();
   const [savedViews, setSavedViews] = useState<{ id: string; name: string; filters: string }[]>([]);
   const [viewName, setViewName] = useState(''); const [selectedView, setSelectedView] = useState('');
-  const f = { q: sp.get('q') ?? '', status: sp.get('status') ?? '', teamId: sp.get('teamId') ?? '', overdue: sp.get('overdue') ?? '', assigneeId: sp.get('assigneeId') ?? '', unassigned: sp.get('unassigned') ?? '', priority: sp.get('priority') ?? '', type: sp.get('type') ?? '', active: sp.get('active') ?? '', approvable: sp.get('approvable') ?? '' };
+  const f = { q: sp.get('q') ?? '', status: sp.get('status') ?? '', teamId: sp.get('teamId') ?? '', overdue: sp.get('overdue') ?? '', assigneeId: sp.get('assigneeId') ?? '', unassigned: sp.get('unassigned') ?? '', priority: sp.get('priority') ?? '', highPriority: sp.get('highPriority') ?? '', type: sp.get('type') ?? '', active: sp.get('active') ?? '', approvable: sp.get('approvable') ?? '' };
   const assigneeSel = f.unassigned === 'true' ? 'unassigned' : f.assigneeId === String(me.user.id) ? 'me' : f.assigneeId ? 'other' : '';
   const setAssignee = (v: string) => setSp((prev) => { const n = new URLSearchParams(prev); n.delete('assigneeId'); n.delete('unassigned'); if (v === 'me') n.set('assigneeId', String(me.user.id)); if (v === 'unassigned') n.set('unassigned', 'true'); return n; }, { replace: true });
   const [qText, setQText] = useState(f.q);
@@ -208,13 +217,14 @@ function Dashboard() {
   useEffect(() => { if (f.q !== pushed.current) { pushed.current = f.q; setQText(f.q); } }, [f.q]); // URL changed elsewhere (tile click, reset, back button)
   useEffect(() => { if (qText === pushed.current) return; const t = setTimeout(() => { pushed.current = qText; setRef.current('q', qText); }, 300); return () => clearTimeout(t); }, [qText]);
   const teams = useQuery({ queryKey: ['teams'], queryFn: () => api<{ data: Team[] }>('/teams') });
-  const sum = useQuery({ queryKey: ['summary'], queryFn: () => api<DashboardSummary>('/dashboard/summary') });
+  const sum = useQuery({ queryKey: ['summary'], queryFn: () => api<DashboardSummary>('/dashboard/summary'), refetchInterval: 60_000 });
   const list = useInfiniteQuery({
     queryKey: ['items', f], initialPageParam: undefined as number | undefined,
     queryFn: ({ pageParam, signal }) => api<ItemList>('/items', { signal, query: { ...f, limit: 20, cursor: pageParam } }),
     getNextPageParam: (l) => l.nextCursor ?? undefined,
   });
   const rows = list.data?.pages.flatMap((p) => p.data) ?? []; const filtered = Object.values(f).some(Boolean);
+  const refreshDashboard = () => { void Promise.all([sum.refetch(), list.refetch()]); };
   const canCreate = me.memberships.some((m) => atLeast(m.role, 'MEMBER'));
   const viewStorageKey = `newtonite:saved-work-views:${me.user.id}`;
   useEffect(() => {
@@ -254,18 +264,21 @@ function Dashboard() {
     document.getElementById('queue-title')?.scrollIntoView?.({ behavior: 'auto', block: 'start' });
   };
   return <div className="pad dashboard">
-    <header className="head hero-head"><div><p className="eyebrow">Aether / Operations control</p><h1>Operational overview</h1><p className="muted">Clarity across every moving part. A team-scoped view of the work in motion.</p></div><div className="hero-actions">{canCreate && <Link className="btn primary" to="/items/new">＋ Create work item</Link>}<span className="scope-stamp"><span>ACCESS SCOPE</span><b>Your team memberships</b></span></div></header>
+    <header className="head hero-head"><div><p className="eyebrow">Aether / Operations control</p><h1>Operational overview</h1><p className="muted">Clarity across every moving part. A team-scoped view of the work in motion.</p>
+      {sum.data && <p className="muted small">Last refreshed: {sum.dataUpdatedAt ? new Date(sum.dataUpdatedAt).toLocaleString() : 'Waiting for first refresh'}{sum.data.lastUpdatedAt ? ` · Latest work update: ${new Date(sum.data.lastUpdatedAt).toLocaleString()}` : ''}</p>}</div><div className="hero-actions"><button className="btn" type="button" onClick={refreshDashboard} disabled={sum.isFetching || list.isFetching}>{sum.isFetching || list.isFetching ? 'Refreshing…' : 'Refresh data'}</button>{canCreate && <Link className="btn primary" to="/items/new">＋ Create work item</Link>}<span className="scope-stamp"><span>ACCESS SCOPE</span><b>Your team memberships</b></span></div></header>
     <div className="command-deck">
-      <OperationsRadar items={rows} hasMore={!!list.hasNextPage} loading={list.isLoading} selectedStatus={f.status} onSelectStatus={selectRadarStatus} />
+      <OperationsRadar summary={sum.data} loading={sum.isLoading} error={sum.error} retry={() => sum.refetch()} selectedStatus={f.status} onSelectStatus={selectRadarStatus} />
       <div className="command-stack">
         <section className="metrics" aria-label="Summary">{sum.isLoading ? <Skeleton rows={1} /> : sum.error ? <ErrorState error={sum.error} retry={() => sum.refetch()} /> : <>
           <button onClick={() => setSp({ assigneeId: String(me.user.id), active: 'true' })}><b>{sum.data!.assignedToMe}</b><span>Assigned to me</span><small>Active across your teams</small></button>
           <button onClick={() => setSp({ approvable: 'true' })}><b>{sum.data!.awaitingMyApproval}</b><span>Awaiting my approval</span><small>In your approval queue</small></button>
-          <button className={sum.data!.unassignedUrgent ? 'hot' : ''} onClick={() => setSp({ unassigned: 'true', priority: 'URGENT', active: 'true' })}><b>{sum.data!.unassignedUrgent}</b><span>Unassigned urgent</span><small>Active, without an owner</small></button>
+          <button className={sum.data!.criticalHigh ? 'hot' : ''} onClick={() => setSp({ highPriority: 'true', active: 'true' })}><b>{sum.data!.criticalHigh}</b><span>High + urgent</span><small>Active across your teams</small></button>
+          <button className={sum.data!.unassignedUrgent ? 'hot' : ''} onClick={() => setSp({ unassigned: 'true', highPriority: 'true', active: 'true' })}><b>{sum.data!.unassignedUrgent}</b><span>Unassigned urgent</span><small>High or urgent, active</small></button>
           <button className={sum.data!.overdue ? 'hot' : ''} onClick={() => setSp({ overdue: 'true' })}><b>{sum.data!.overdue}</b><span>Overdue</span><small>Past due and unresolved</small></button></>}</section>
-        <OperationalInsights summary={sum.data} loading={sum.isLoading} retry={() => sum.refetch()} />
+        <OperationalInsights summary={sum.data} loading={sum.isLoading} error={sum.error} retry={() => sum.refetch()} />
       </div>
     </div>
+    <DashboardAnalysis summary={sum.data} loading={sum.isLoading} error={sum.error} retry={() => sum.refetch()} />
     <section className="queue-section" aria-labelledby="queue-title">
     <header className="queue-heading"><div><p className="eyebrow">Queue / Team-scoped work</p><h2 id="queue-title">Work queue</h2></div><span className="queue-count">{rows.length} loaded{list.hasNextPage ? ' · more available' : ''}</span></header>
     <div className="filters" role="search">
@@ -286,7 +299,7 @@ function Dashboard() {
       <span className="muted small">Stored only in this browser</span></div>
       {filtered && <form className="save-view-form" onSubmit={saveView}><label className="sr-only" htmlFor="saved-view-name">Name this filter view</label><input id="saved-view-name" maxLength={40} placeholder="Name this view" value={viewName} onChange={(event) => setViewName(event.target.value)} required /><button className="btn" disabled={!viewName.trim()}>Save current filters</button></form>}
     </section>
-    {(f.active || f.approvable) && <div className="chips">{f.active && <button className="chip" aria-label="Remove filter: open items only" onClick={() => set('active', '')}>Open items only ×</button>}{f.approvable && <button className="chip" aria-label="Remove filter: awaiting my approval" onClick={() => set('approvable', '')}>Awaiting my approval ×</button>}</div>}
+    {(f.active || f.approvable || f.highPriority) && <div className="chips">{f.active && <button className="chip" aria-label="Remove filter: active items only" onClick={() => set('active', '')}>Active items only ×</button>}{f.approvable && <button className="chip" aria-label="Remove filter: awaiting my approval" onClick={() => set('approvable', '')}>Awaiting my approval ×</button>}{f.highPriority && <button className="chip" aria-label="Remove filter: high and urgent priority" onClick={() => set('highPriority', '')}>High + urgent ×</button>}</div>}
     {list.isLoading ? <Skeleton /> : list.error ? <ErrorState error={list.error} retry={() => list.refetch()} /> : rows.length === 0 ? <Empty title="No work items match" hint={filtered ? 'Try clearing a filter.' : 'Create the first item to get started.'} /> :
       <div className="tablewrap"><table><thead><tr><th>Ref</th><th>Title</th><th>Status</th><th>Priority</th><th>Assignee</th><th>Due</th><th>Updated</th></tr></thead><tbody>
         {rows.map((i) => <tr key={i.id} tabIndex={0} onClick={() => nav(`/items/${i.id}`)} onKeyDown={(e) => e.key === 'Enter' && nav(`/items/${i.id}`)}>
@@ -298,19 +311,19 @@ function Dashboard() {
   </div>;
 }
 
-function OperationsRadar({ items, hasMore, loading, selectedStatus, onSelectStatus }: { items: Item[]; hasMore: boolean; loading: boolean; selectedStatus: string; onSelectStatus: (status: Status) => void }) {
+function OperationsRadar({ summary, loading, error, retry, selectedStatus, onSelectStatus }: { summary?: DashboardSummary; loading: boolean; error: unknown; retry: () => void; selectedStatus: string; onSelectStatus: (status: Status) => void }) {
   const distribution = STATUSES.map((status) => ({
     status,
-    count: items.filter((item) => item.status === status).length,
+    count: summary?.statusCounts[status] ?? 0,
   }));
-  const total = items.length;
+  const total = distribution.reduce((count, item) => count + item.count, 0);
   return <section className="radar-panel" aria-labelledby="radar-title">
-    <header className="panel-heading"><div><p className="eyebrow">Aether nexus / Workflow field</p><h2 id="radar-title">Operations core</h2></div><span className="panel-index">{loading ? 'SYNC' : `${total.toString().padStart(2, '0')} IN SCOPE`}</span></header>
-    {loading ? <Skeleton rows={3} /> : <>
+    <header className="panel-heading"><div><p className="eyebrow">Aether nexus / Workflow field</p><h2 id="radar-title">Operations core</h2></div><span className="panel-index">{loading ? 'SYNC' : `${summary?.activeTotal ?? 0} ACTIVE`}</span></header>
+    {loading ? <Skeleton rows={3} /> : error ? <ErrorState error={error} retry={retry} /> : summary ? <>
       <div className="radar-content">
         <svg className="radar-chart" viewBox="0 0 240 240" role="img" aria-labelledby="radar-svg-title radar-svg-desc">
           <title id="radar-svg-title">Work distribution by workflow status</title>
-          <desc id="radar-svg-desc">{distribution.map(({ status, count }) => `${status.replace(/_/g, ' ')}: ${count}`).join('; ')} among {total} currently loaded work items.</desc>
+          <desc id="radar-svg-desc">{distribution.map(({ status, count }) => `${status.replace(/_/g, ' ')}: ${count}`).join('; ')} across accessible teams, among {total} work items. {summary.activeTotal} are active.</desc>
           <circle cx="120" cy="120" r="104" className="radar-outline" />
           <circle cx="120" cy="120" r="21" className="radar-outline" />
           <path d="M120 16v208M16 120h208M46 46l148 148M194 46 46 194" className="radar-crosshair" />
@@ -337,27 +350,88 @@ function OperationsRadar({ items, hasMore, loading, selectedStatus, onSelectStat
           </li>)}
         </ul>
       </div>
-      <p className="radar-footnote">{total ? `Distribution of ${total} work item${total === 1 ? '' : 's'} loaded for this queue view.` : 'No work items are currently loaded for this view.'}{hasMore ? ' Load more to extend the sample.' : ''}</p>
-    </>}
+      <p className="radar-footnote">{total ? `Distribution of ${total} work item${total === 1 ? '' : 's'} across your accessible teams.` : 'No work items are currently visible in your teams.'} Select a status to filter the work queue.</p>
+    </> : <Empty title="No summary available" hint="Retry to load team-scoped status counts." />}
   </section>;
 }
 
-function OperationalInsights({ summary, loading, retry }: { summary?: DashboardSummary; loading: boolean; retry: () => void }) {
+function DashboardAnalysis({ summary, loading, error, retry }: { summary?: DashboardSummary; loading: boolean; error: unknown; retry: () => void }) {
+  if (loading) return <section className="analysis-grid" aria-label="Operations intelligence"><Skeleton rows={4} /></section>;
+  if (error || !summary) return <section className="analysis-grid"><ErrorState error={error} retry={retry} /></section>;
+  const maxTrend = Math.max(1, ...summary.trends.flatMap((day) => [day.created, day.completed]));
+  const hasTrendEvents = summary.trends.some((day) => day.created > 0 || day.completed > 0);
+  return <section className="analysis-grid" aria-label="Operations intelligence">
+    <article className="analysis-panel" aria-labelledby="intelligence-title">
+      <header className="panel-heading"><div><p className="eyebrow">Deterministic ranking / No external AI</p><h2 id="intelligence-title">Operations intelligence</h2></div><span className="panel-index">TOP {summary.intelligence.length}</span></header>
+      <p className="insight-method">Score = priority (10–60) + overdue (25) or near deadline (8–15) + approval (10) + unassigned (5) + status age (5–10), normalized to 100. Status age uses recorded transitions, falling back to creation time when no transition is recorded.</p>
+      {summary.intelligence.length ? <ol className="attention-list">{summary.intelligence.map((item) => <li key={item.id}>
+        <div className="attention-score" aria-label={`Attention score ${item.score} out of 100`}>{item.score}</div>
+        <div className="attention-detail"><Link to={`/items/${item.id}`}><strong>{item.reference}</strong> · {item.title}</Link>
+          <p><span>{item.teamName}</span> · <StatusBadge s={item.status} /> · <PriorityTag p={item.priority} /> · {item.assigneeName ?? 'Unassigned'}</p>
+          <details><summary>Why this needs attention</summary><ul>{item.factors.map((factor) => <li key={factor}>{factor}</li>)}</ul></details>
+        </div>
+      </li>)}</ol> : <Empty title="No active work to rank" hint="New active items will appear here based on recorded priority and due-date factors." />}
+      <p className="analysis-note">Ranking is an explainable urgency aid, not a change to the work item's stored priority. The application has no explicit blocked state.</p>
+    </article>
+    <article className="analysis-panel" aria-labelledby="deadline-title">
+      <header className="panel-heading"><div><p className="eyebrow">Recorded due dates / No SLA policies</p><h2 id="deadline-title">Deadline-risk watch</h2></div><span className="panel-index">7 DAY WINDOW</span></header>
+      {summary.deadlineWatch.length ? <ul className="deadline-list">{summary.deadlineWatch.map((item) => <li key={item.id} className={`deadline-${item.risk.toLowerCase()}`}>
+        <div><span className="deadline-risk">{item.risk.replace('_', ' ')}</span><span className="mono">{item.reference}</span></div>
+        <Link to={`/items/${item.id}`}><strong>{item.title}</strong></Link>
+        <p>{new Date(item.dueAt).toLocaleString()} · {ago(item.dueAt)} · {item.status.replace(/_/g, ' ')} · {item.assigneeName ?? 'Unassigned'} · {item.teamName}</p>
+      </li>)}</ul> : <Empty title="No upcoming deadlines" hint="No active items with recorded due dates fall within the 7-day watch window." />}
+      <p className="analysis-note">At risk means due within 24 hours; overdue means past the actual due date. Upcoming is not an SLA-compliance claim.</p>
+    </article>
+    <article className="analysis-panel" aria-labelledby="bottlenecks-title">
+      <header className="panel-heading"><div><p className="eyebrow">Current backlog conditions / Rule-based</p><h2 id="bottlenecks-title">Workflow bottlenecks</h2></div><span className="panel-index">{summary.bottlenecks.length} FINDINGS</span></header>
+      {summary.bottlenecks.length ? <ul className="bottleneck-list">{summary.bottlenecks.map((finding) => <li key={finding.key}>
+        <Link to={`/?status=${finding.status}&active=true`}><strong>{finding.title}</strong><span>{finding.count}</span></Link>
+        <p>{finding.evidence}</p><p className="muted">{finding.recommendation}</p>
+      </li>)}</ul> : <p className="muted">No aging status queues or approval backlog met the current review thresholds. These are current conditions, not statistical trends.</p>}
+      <p className="analysis-note">Signals use 7 days without a recorded transition (3 for approvals). Repeated rework cannot be measured reliably from existing event types.</p>
+    </article>
+    <article className="analysis-panel trends-panel" aria-labelledby="trends-title">
+      <header className="panel-heading"><div><p className="eyebrow">Append-only activity events / Daily</p><h2 id="trends-title">Operations trends · last 14 days</h2></div><span className="panel-index">CREATED / COMPLETED</span></header>
+      {hasTrendEvents ? <>
+        <div className="trend-legend"><span><i className="trend-created" /> Created</span><span><i className="trend-completed" /> Completed</span></div>
+        <div className="trend-chart" role="img" aria-label={`Daily created and completed work from ${summary.trends[0]?.date} to ${summary.trends.at(-1)?.date}`}>
+          {summary.trends.map((day) => <div className="trend-day" key={day.date} title={`${day.date}: ${day.created} created, ${day.completed} completed`}>
+            <span className="trend-bars"><i className="trend-created" style={{ height: `${Math.max(day.created ? 3 : 0, day.created / maxTrend * 100)}%` }} /><i className="trend-completed" style={{ height: `${Math.max(day.completed ? 3 : 0, day.completed / maxTrend * 100)}%` }} /></span>
+            <small>{day.date.slice(8)}</small>
+          </div>)}
+        </div>
+        <ul className="sr-only">{summary.trends.map((day) => <li key={day.date}>{day.date}: {day.created} created, {day.completed} completed</li>)}</ul>
+      </> : <Empty title="Not enough recent activity" hint="No matching creation or completion events were recorded in the last 14 days." />}
+      <p className="analysis-note">Completion counts use APPROVED and recorded status transitions to RESOLVED. Historical backlog is not reconstructed from current item states.</p>
+    </article>
+  </section>;
+}
+
+function OperationalInsights({ summary, loading, error, retry }: { summary?: DashboardSummary; loading: boolean; error: unknown; retry: () => void }) {
   const insights = summary ? [
     { count: summary.overdue, title: 'Past due', reason: 'Unresolved work has passed its due date.', href: '/?overdue=true', tone: 'warning' },
-    { count: summary.unassignedUrgent, title: 'Urgent without an owner', reason: 'Urgent active work is still unassigned.', href: '/?unassigned=true&priority=URGENT&active=true', tone: 'critical' },
+    { count: summary.unassignedUrgent, title: 'Urgent without an owner', reason: 'High or urgent active work is still unassigned.', href: '/?unassigned=true&highPriority=true&active=true', tone: 'critical' },
     { count: summary.awaitingMyApproval, title: 'Approval gate', reason: 'Items are waiting in your approval queue.', href: '/?approvable=true', tone: 'attention' },
   ].filter((insight) => insight.count > 0) : [];
   return <section className="insights-panel" aria-labelledby="insights-title">
-    <header className="panel-heading"><div><p className="eyebrow">Decision support / Verified data</p><h2 id="insights-title">Operational signals</h2></div><span className="insight-mark" aria-hidden="true">◎</span></header>
+    <header className="panel-heading"><div><p className="eyebrow">Decision support / Verified data</p><h2 id="insights-title">Team workload pulse</h2></div><span className="insight-mark" aria-hidden="true">◎</span></header>
     {loading ? <Skeleton rows={3} /> : summary ? <>
+      <div className="workload-pulse">
+        <p className="workload-total"><strong>{summary.activeTotal}</strong><span>Active work across your teams</span></p>
+        <ul aria-label="Team work by status">{STATUSES.map((status) => <li key={status}><Link to={`/?status=${status}`}><span>{status.replace(/_/g, ' ')}</span><strong>{summary.statusCounts[status]}</strong></Link></li>)}</ul>
+        <p className="eyebrow workload-subhead">Team workload</p>
+        <ul aria-label="Team workload">{summary.teamWorkload.map((team) => <li key={team.teamId}><Link to={`/?teamId=${team.teamId}&active=true`}><span>{team.teamName}</span><strong>{team.active}</strong></Link>
+          <small>{team.highPriority} high/urgent · {team.unassigned} unassigned · {team.overdue} overdue · {team.awaitingApproval} approvals</small></li>)}</ul>
+        <p className="eyebrow workload-subhead">Assigned workload</p>
+        {summary.assigneeWorkload.length ? <ul aria-label="Active work by assignee">{summary.assigneeWorkload.map((assignee) => <li key={assignee.assigneeId}><Link to={`/?assigneeId=${assignee.assigneeId}&active=true`}><span>{assignee.assigneeName}</span><strong>{assignee.active}</strong></Link><small>{assignee.highPriority} high/urgent</small></li>)}</ul> : <p className="muted small">No active items are currently assigned.</p>}
+      </div>
       <p className="insight-method">Rule-based signals from your team-scoped API summary. No predictions or historical comparisons.</p>
-      {insights.length ? <ul className="insight-list">{insights.map((insight) => <li key={insight.title} className={`insight-item ${insight.tone}`}>
+        {insights.length ? <ul className="insight-list">{insights.map((insight) => <li key={insight.title} className={`insight-item ${insight.tone}`}>
         <span className="insight-count">{insight.count}</span>
         <div><h3>{insight.title}</h3><p>{insight.reason}</p><Link to={insight.href}>Review matching work <span aria-hidden="true">↗</span></Link></div>
-      </li>)}</ul> : <div className="insight-clear"><span aria-hidden="true">✓</span><div><strong>No flagged signals</strong><p className="muted">The verified summary has no overdue, unassigned urgent, or awaiting-approval items.</p></div></div>}
+      </li>)}      </ul> : <div className="insight-clear"><span aria-hidden="true">✓</span><div><strong>No flagged signals</strong><p className="muted">The verified summary has no overdue, unassigned high or urgent, or awaiting-approval items.</p></div></div>}
       <p className="insight-footnote">Counts reflect memberships visible to your account.</p>
-    </> : <div className="insight-clear"><span aria-hidden="true">·</span><div><strong>Signals unavailable</strong><p className="muted">A verified operational summary could not be loaded.</p><button className="link" onClick={retry}>Retry summary</button></div></div>}
+    </> : <ErrorState error={error} retry={retry} />}
   </section>;
 }
 

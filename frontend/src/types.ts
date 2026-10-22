@@ -27,4 +27,39 @@ export interface Team { id: number; name: string; slug: string; description: str
 export interface Member { id: number; name: string; email: string; role: Role }
 export interface Activity { id: number; event_type: string; actor_name: string; previous_value: unknown; new_value: unknown; metadata: { note?: string } | null; created_at: string }
 export interface Comment { id: number; author_id: number; body: string; created_at: string }
-export interface DashboardSummary { assignedToMe: number; unassignedUrgent: number; awaitingMyApproval: number; overdue: number }
+export interface DashboardSummary {
+  criticalHigh: number;
+  assignedToMe: number;
+  unassignedUrgent: number;
+  awaitingMyApproval: number;
+  overdue: number;
+  activeTotal: number;
+  statusCounts: Record<Status, number>;
+  lastUpdatedAt: string | null;
+  intelligence: IntelligenceItem[];
+  deadlineWatch: DeadlineItem[];
+  bottlenecks: Bottleneck[];
+  teamWorkload: TeamWorkload[];
+  assigneeWorkload: AssigneeWorkload[];
+  trends: TrendDay[];
+}
+export interface IntelligenceItem {
+  id: number; reference: string; title: string; status: Status; priority: Priority;
+  teamId: number; teamName: string; assigneeName: string | null; dueAt: string | null;
+  score: number; factors: string[]; statusAgeDays: number;
+}
+export interface DeadlineItem {
+  id: number; reference: string; title: string; status: Status; priority: Priority;
+  dueAt: string; teamId: number; teamName: string; assigneeName: string | null;
+  risk: 'OVERDUE' | 'AT_RISK' | 'UPCOMING';
+}
+export interface Bottleneck {
+  key: string; title: string; count: number; evidence: string;
+  recommendation: string; status: Status;
+}
+export interface TeamWorkload {
+  teamId: number; teamName: string; active: number; highPriority: number;
+  unassigned: number; overdue: number; awaitingApproval: number;
+}
+export interface AssigneeWorkload { assigneeId: number; assigneeName: string; active: number; highPriority: number }
+export interface TrendDay { date: string; created: number; completed: number }
